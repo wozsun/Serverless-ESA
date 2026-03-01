@@ -1,0 +1,6 @@
+{
+    "name": "api",
+    "entry": "./main/index.js",
+    "installCommand": null,
+    "buildCommand": null
+}
