@@ -10,9 +10,9 @@ const jsonErrorResponse = (error) =>
     });
 
 const RANDOM_IMG_CONFIG = {
-    BASE_IMAGE_URL: "https://example.com/", // 图片基础路径
-    ALLOWED_PARAMS: new Set(["type", "theme", "token"]),     // 允许的查询参数
-    VALID_TYPES: new Set(["pc", "mb", "sq"]),                // 合法图片类型
+    BASE_IMAGE_URL: "https://example.com/",
+    ALLOWED_PARAMS: new Set(["type", "theme"]),
+    VALID_TYPES: new Set(["pc", "mb", "sq"]),
     FOLDER_MAP: {
         dark: { pc: 27, mb: 6, sq: 0 },
         light: { pc: 28, mb: 4, sq: 0 },
@@ -71,7 +71,6 @@ const handleRandomImg = async (request) => {
         finalTheme = availableThemes[Math.floor(Math.random() * availableThemes.length)];
     }
 
-
     const imageNumber = Math.floor(Math.random() * folderMap[finalTheme][type]) + 1;
     const imageUrl = `${RANDOM_IMG_CONFIG.BASE_IMAGE_URL}${type}-${finalTheme}/${imageNumber}.webp`;
 
@@ -84,18 +83,7 @@ const handleRandomImg = async (request) => {
 };
 
 const routes = {
-    "/": async () => {
-        let res;
-        try {
-            res = await fetch("https://example.com/404.html");
-        } catch (err) {
-            return jsonErrorResponse(GLOBAL_ERRORS.NOT_FOUND);
-        }
-        return new Response(await res.text(), {
-            status: 404,
-            headers: { "Content-Type": res.headers.get("Content-Type") || "text/html" },
-        });
-    },
+    "/": async () => jsonErrorResponse(GLOBAL_ERRORS.NOT_FOUND),
     "/hello": async () =>
         new Response(JSON.stringify({ message: "Hello, World!" }), {
             status: 200,
