@@ -1,0 +1,36 @@
+name: Random Img E2E
+
+on:
+  push:
+
+jobs:
+  e2e-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      BASE_URL: ${{ secrets.BASE_URL }}
+      ASSET_BASE_URL: ${{ secrets.ASSET_BASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate required env vars
+        run: |
+          if [ -z "$BASE_URL" ]; then
+            echo "BASE_URL is required (set repository secret BASE_URL)"
+            exit 1
+          fi
+          if [ -z "$ASSET_BASE_URL" ]; then
+            echo "ASSET_BASE_URL is required (set repository secret ASSET_BASE_URL)"
+            exit 1
+          fi
+
+      - name: Run E2E test
+        run: python random-img/test.py
