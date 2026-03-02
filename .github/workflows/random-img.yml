@@ -2,6 +2,7 @@ name: Random Img Test
 
 on:
   push:
+  workflow_dispatch:
 
 jobs:
   random-img-test:
