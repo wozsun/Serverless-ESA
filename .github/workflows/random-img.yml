@@ -36,5 +36,4 @@ jobs:
       - name: Run test
         shell: bash
         run: |
-          set -euo pipefail
           python random-img/test.py
