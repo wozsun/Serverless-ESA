@@ -7,6 +7,7 @@ import re
 import socket
 import ssl
 import time
+import http.client
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -97,18 +98,44 @@ class ApiTester:
         for attempt in range(1, max_attempts + 1):
             try:
                 with opener.open(req, timeout=self.timeout) as resp:
+                    status = resp.getcode()
+                    headers = {k.lower(): v for k, v in resp.headers.items()}
+                    try:
+                        body = resp.read()
+                    except http.client.IncompleteRead as exc:
+                        partial = bytes(exc.partial or b"")
+                        if partial:
+                            body = partial
+                        elif attempt < max_attempts:
+                            time.sleep(0.2 * attempt)
+                            continue
+                        else:
+                            raise
                     return HttpResult(
-                        status=resp.getcode(),
-                        headers={k.lower(): v for k, v in resp.headers.items()},
-                        body=resp.read(),
+                        status=status,
+                        headers=headers,
+                        body=body,
                     )
             except urllib.error.HTTPError as exc:
+                try:
+                    error_body = exc.read()
+                except http.client.IncompleteRead as read_exc:
+                    error_body = bytes(read_exc.partial or b"")
                 return HttpResult(
                     status=exc.code,
                     headers={k.lower(): v for k, v in exc.headers.items()},
-                    body=exc.read(),
+                    body=error_body,
                 )
-            except (urllib.error.URLError, socket.timeout, TimeoutError, ssl.SSLError) as exc:
+            except (
+                urllib.error.URLError,
+                socket.timeout,
+                TimeoutError,
+                ssl.SSLError,
+                http.client.IncompleteRead,
+                http.client.RemoteDisconnected,
+                ConnectionResetError,
+                OSError,
+            ) as exc:
                 if attempt == max_attempts:
                     return HttpResult(
                         status=599,

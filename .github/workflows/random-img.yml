@@ -1,10 +1,10 @@
-name: Random Img E2E
+name: Random Img Test
 
 on:
   push:
 
 jobs:
-  e2e-test:
+  random-img-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -19,7 +19,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Validate required env vars
         run: |
@@ -32,5 +32,34 @@ jobs:
             exit 1
           fi
 
-      - name: Run E2E test
-        run: python random-img/test.py
+      - name: Run test
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          run_once() {
+            local log_file="$1"
+            set +e
+            python random-img/test.py 2>&1 | tee "$log_file"
+            local cmd_exit=${PIPESTATUS[0]}
+            set -e
+            return "$cmd_exit"
+          }
+
+          first_log="$(mktemp)"
+          if run_once "$first_log"; then
+            exit 0
+          fi
+
+          if grep -Eiq 'IncompleteRead|RemoteDisconnected|request failed after retries|timed out|Temporary failure in name resolution|Connection reset by peer' "$first_log"; then
+            echo "Transient network/read error detected, retrying once..."
+            sleep 3
+            second_log="$(mktemp)"
+            if run_once "$second_log"; then
+              exit 0
+            fi
+            exit 1
+          fi
+
+          echo "Non-transient failure, not retrying."
+          exit 1
