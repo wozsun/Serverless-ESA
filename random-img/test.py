@@ -20,11 +20,116 @@ def _required_env(name: str) -> str:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
 
+# 关键运行/测试参数（规则变化时优先修改这里）。
+# 统一配置环境变量名（JSON 字符串）。
+CONFIG_ENV_NAME = "CONFIG"
 
-BASE_URL = _required_env("BASE_URL")
-ASSET_BASE_URL = _required_env("ASSET_BASE_URL")
+# 单次 HTTP 请求超时时间（秒）。
 TIMEOUT_SECONDS = 20.0
-RANDOM_RUNS = 20
+# 稳定性测试中随机重定向抽样次数。
+RANDOM_RUNS = 30
+# 瞬时网络/读取失败时的最大重试次数。
+MAX_REQUEST_ATTEMPTS = 5
+# 线性退避基数（sleep = base * attempt）。
+RETRY_BACKOFF_BASE_SECONDS = 1
+
+# 从统计结果筛选测试组合时允许的设备维度。
+SUPPORTED_DEVICES = {"pc", "mb"}
+# 从统计结果筛选测试组合时允许的亮度维度。
+SUPPORTED_BRIGHTNESS = {"dark", "light"}
+
+# 一次完整测试中必须覆盖到的错误类型。
+REQUIRED_ERROR_COVERAGE_KEYS = {
+    "INVALID_QUERY_PARAMS",
+    "INVALID_DEVICE",
+    "INVALID_BRIGHTNESS",
+    "INVALID_METHOD",
+    "INVALID_THEME",
+    "INVALID_COUNT_REQUEST",
+    "NOT_FOUND",
+}
+# 受数据分布影响、可能缺失的错误类型。
+OPTIONAL_ERROR_COVERAGE_KEYS = {"NO_IMAGES_FOR_COMBINATION", "NO_AVAILABLE_IMAGES"}
+
+def _normalize_asset_base_url(url: str) -> str:
+    return url.rstrip("/") + "/"
+
+
+def _required_config(raw_config: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(raw_config)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid CONFIG JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Invalid CONFIG JSON: root must be an object")
+    return parsed
+
+
+def _required_config_str(config: dict[str, Any], key: str) -> str:
+    value = config.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"Missing or invalid CONFIG field: {key}")
+    return value.strip()
+
+
+def _config_bool(config: dict[str, Any], key: str, default: bool) -> bool:
+    raw_value = config.get(key)
+    if raw_value is None:
+        return default
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, (int, float)):
+        return raw_value != 0
+    if isinstance(raw_value, str):
+        return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+    raise RuntimeError(f"Invalid boolean CONFIG field: {key}")
+
+
+def _required_config_int(config: dict[str, Any], key: str) -> int:
+    raw_value = config.get(key)
+    if isinstance(raw_value, bool):
+        raise RuntimeError(f"Invalid integer CONFIG field: {key}")
+    if isinstance(raw_value, int):
+        value = raw_value
+    elif isinstance(raw_value, str) and raw_value.strip():
+        try:
+            value = int(raw_value.strip())
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid integer CONFIG field: {key}") from exc
+    else:
+        raise RuntimeError(f"Missing or invalid CONFIG field: {key}")
+
+    if value <= 0:
+        raise RuntimeError(f"Invalid CONFIG field: {key} must be > 0")
+    return value
+
+def _mask_config_for_log(config_raw: str) -> str:
+    """
+    对 CONFIG_RAW 进行脱敏，只保留字段名和类型信息，不输出具体值。
+    """
+    try:
+        parsed = json.loads(config_raw)
+        if isinstance(parsed, dict):
+            summary = {k: type(v).__name__ for k, v in parsed.items()}
+            return f"<CONFIG fields: {summary}>"
+        else:
+            return "<CONFIG: not a dict>"
+    except Exception:
+        return "<CONFIG: invalid JSON>"
+
+CONFIG_RAW = _required_env(CONFIG_ENV_NAME)
+CONFIG = _required_config(CONFIG_RAW)
+
+API_BASE_URL = _required_config_str(CONFIG, "API_BASE_URL")
+ASSET_BASE_URL = _normalize_asset_base_url(_required_config_str(CONFIG, "ASSET_BASE_URL"))
+RANDOM_IMG_COUNT_PATH = "/" + _required_config_str(CONFIG, "RANDOM_IMG_COUNT_PATH").strip("/")
+
+IMAGE_FILENAME_DIGITS = _required_config_int(CONFIG, "IMAGE_FILENAME_DIGITS")
+RANDOM_IMG_COUNT_INVALID_QUERY_MESSAGE_PART = f"{RANDOM_IMG_COUNT_PATH} only accepts exact path without query parameters"
+ENABLE_REDIRECT_TESTS = _config_bool(CONFIG, "ENABLE_REDIRECT_TESTS", True)
+
+# 重定向地址格式校验正则（基于 ASSET_BASE_URL 做完整 URL 校验）。
+REDIRECT_LOCATION_PATTERN = rf"^{re.escape(ASSET_BASE_URL)}(pc|mb)-(dark|light)/[a-z0-9_-]+/\d{{{IMAGE_FILENAME_DIGITS}}}\.webp$"
 
 
 def _mask_url_for_log(url: str) -> str:
@@ -60,9 +165,9 @@ class HttpResult:
 
 
 class ApiTester:
-    def __init__(self, base_url: str, asset_base_url: str, timeout: float, random_runs: int) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.asset_base_url = asset_base_url.rstrip("/") + "/"
+    def __init__(self, api_base_url: str, asset_base_url: str, timeout: float, random_runs: int) -> None:
+        self.api_base_url = api_base_url.rstrip("/")
+        self.asset_base_url = _normalize_asset_base_url(asset_base_url)
         self.timeout = timeout
         self.random_runs = random_runs
         self.error_coverage: dict[str, bool] = {
@@ -87,15 +192,15 @@ class ApiTester:
         if not path.startswith("/"):
             path = "/" + path
         if not query:
-            return f"{self.base_url}{path}"
-        return f"{self.base_url}{path}?{urllib.parse.urlencode(query)}"
+            return f"{self.api_base_url}{path}"
+        return f"{self.api_base_url}{path}?{urllib.parse.urlencode(query)}"
 
     def request(self, path: str, query: dict[str, str] | None = None, follow_redirects: bool = True) -> HttpResult:
         url = self._url(path, query)
         req = urllib.request.Request(url, method="GET")
         opener = self.normal_opener if follow_redirects else self.no_redirect_opener
 
-        max_attempts = 3
+        max_attempts = MAX_REQUEST_ATTEMPTS
         for attempt in range(1, max_attempts + 1):
             try:
                 with opener.open(req, timeout=self.timeout) as resp:
@@ -108,7 +213,7 @@ class ApiTester:
                         if partial:
                             body = partial
                         elif attempt < max_attempts:
-                            time.sleep(0.2 * attempt)
+                            time.sleep(RETRY_BACKOFF_BASE_SECONDS * attempt)
                             continue
                         else:
                             raise
@@ -143,7 +248,7 @@ class ApiTester:
                         headers={},
                         body=f"request failed after retries: {exc}".encode("utf-8", errors="replace"),
                     )
-                time.sleep(0.2 * attempt)
+                time.sleep(RETRY_BACKOFF_BASE_SECONDS * attempt)
 
         return HttpResult(status=599, headers={}, body=b"request failed: unexpected retry flow")
 
@@ -178,7 +283,7 @@ class ApiTester:
             self.error_coverage["INVALID_METHOD"] = True
         elif "Invalid theme" in message:
             self.error_coverage["INVALID_THEME"] = True
-        elif "/random-img-count only accepts exact path without query parameters" in message:
+        elif RANDOM_IMG_COUNT_INVALID_QUERY_MESSAGE_PART in message:
             self.error_coverage["INVALID_COUNT_REQUEST"] = True
         elif "No available images for the selected filters" in message:
             self.error_coverage["NO_IMAGES_FOR_COMBINATION"] = True
@@ -261,19 +366,21 @@ class ApiTester:
         )
 
     def run(self) -> int:
-        print(f"Testing base URL: {_mask_url_for_log(self.base_url)}")
+        print(f"CONFIG env value: {_mask_config_for_log(CONFIG_RAW)}")
+        print(f"Testing API base URL: {_mask_url_for_log(self.api_base_url)}")
         print(f"Expect asset base URL: {_mask_url_for_log(self.asset_base_url)} (strict=True)")
+        print(f"Redirect tests enabled: {ENABLE_REDIRECT_TESTS}")
         started = time.time()
 
         # 1) 统计接口 schema + URL 限制
-        count_resp = self.request("/random-img-count")
-        self.assert_true(count_resp.status == 200, "GET /random-img-count status")
+        count_resp = self.request(RANDOM_IMG_COUNT_PATH)
+        self.assert_true(count_resp.status == 200, f"GET {RANDOM_IMG_COUNT_PATH} status")
         self.assert_true(
             "application/json" in count_resp.headers.get("content-type", ""),
-            "GET /random-img-count content-type",
+            f"GET {RANDOM_IMG_COUNT_PATH} content-type",
             count_resp.headers.get("content-type", ""),
         )
-        count_data = self.parse_json(count_resp, "GET /random-img-count json")
+        count_data = self.parse_json(count_resp, f"GET {RANDOM_IMG_COUNT_PATH} json")
         if not isinstance(count_data, dict):
             return 1
 
@@ -296,31 +403,102 @@ class ApiTester:
         self.assert_true(sum_group == int(count_data.get("totalImages", -1)), "totalImages == sum(groupTotals)")
         self.assert_true(sum_theme == int(count_data.get("totalImages", -1)), "totalImages == sum(themeTotals)")
 
-        # /random-img-count 仅允许精确路径且无 query
+        normalized_theme_details: list[dict[str, Any]] = []
+        detail_group_totals: dict[str, int] = {}
+        detail_theme_totals: dict[str, int] = {}
+        seen_detail_keys: set[tuple[str, str, str]] = set()
+
+        for idx, row in enumerate(theme_details):
+            row_label = f"themeDetails[{idx}]"
+            self.assert_true(isinstance(row, dict), f"{row_label} is object", str(row))
+            if not isinstance(row, dict):
+                continue
+
+            device = str(row.get("device", ""))
+            brightness = str(row.get("brightness", ""))
+            theme = str(row.get("theme", ""))
+            raw_count = row.get("count", 0)
+
+            self.assert_true(device in SUPPORTED_DEVICES, f"{row_label}.device", str(row))
+            self.assert_true(brightness in SUPPORTED_BRIGHTNESS, f"{row_label}.brightness", str(row))
+            self.assert_true(bool(theme), f"{row_label}.theme", str(row))
+
+            try:
+                count = int(raw_count)
+            except (TypeError, ValueError):
+                self.assert_true(False, f"{row_label}.count is int", str(row))
+                continue
+
+            self.assert_true(count >= 0, f"{row_label}.count >= 0", str(row))
+            if device not in SUPPORTED_DEVICES or brightness not in SUPPORTED_BRIGHTNESS or not theme:
+                continue
+
+            combo_key = (device, brightness, theme)
+            self.assert_true(combo_key not in seen_detail_keys, f"{row_label} unique combo", str(combo_key))
+            if combo_key in seen_detail_keys:
+                continue
+            seen_detail_keys.add(combo_key)
+
+            normalized_row = {
+                "device": device,
+                "brightness": brightness,
+                "theme": theme,
+                "count": count,
+            }
+            normalized_theme_details.append(normalized_row)
+
+            group_key = f"{device}-{brightness}"
+            detail_group_totals[group_key] = detail_group_totals.get(group_key, 0) + count
+            detail_theme_totals[theme] = detail_theme_totals.get(theme, 0) + count
+
+        for group_key, total in group_totals.items():
+            expected = detail_group_totals.get(str(group_key), 0)
+            self.assert_true(
+                int(total) == expected,
+                f"groupTotals consistency {group_key}",
+                f"groupTotals={total}, themeDetails={expected}",
+            )
+
+        extra_group_keys = sorted(set(detail_group_totals.keys()) - set(group_totals.keys()))
+        self.assert_true(len(extra_group_keys) == 0, "themeDetails has no extra groups", str(extra_group_keys))
+
+        for theme_key, total in theme_totals.items():
+            expected = detail_theme_totals.get(str(theme_key), 0)
+            self.assert_true(
+                int(total) == expected,
+                f"themeTotals consistency {theme_key}",
+                f"themeTotals={total}, themeDetails={expected}",
+            )
+
+        extra_theme_keys = sorted(set(detail_theme_totals.keys()) - set(theme_totals.keys()))
+        self.assert_true(len(extra_theme_keys) == 0, "themeDetails has no extra themes", str(extra_theme_keys))
+
+        # 统计接口仅允许精确路径且无 query
         self.expect_json_error(
-            "/random-img-count",
+            RANDOM_IMG_COUNT_PATH,
             {"x": "1"},
             403,
-            "only accepts exact path without query parameters",
-            "GET /random-img-count with query forbidden",
+            RANDOM_IMG_COUNT_INVALID_QUERY_MESSAGE_PART,
+            f"GET {RANDOM_IMG_COUNT_PATH} with query forbidden",
         )
 
-        count_trailing_slash = self.request("/random-img-count/")
+        count_trailing_path = f"{RANDOM_IMG_COUNT_PATH}/"
+        count_trailing_slash = self.request(count_trailing_path)
         self.assert_true(
             count_trailing_slash.status == 404,
-            "GET /random-img-count/ status (route not found)",
+            f"GET {count_trailing_path} status (route not found)",
             f"status={count_trailing_slash.status}",
         )
 
         count_trailing_json = self._assert_error_json_payload(
             count_trailing_slash,
             404,
-            "GET /random-img-count/ error payload",
+            f"GET {count_trailing_path} error payload",
         )
         if isinstance(count_trailing_json, dict):
             self.assert_true(
                 "API Not Found" in str(count_trailing_json.get("message", "")),
-                "GET /random-img-count/ message",
+                f"GET {count_trailing_path} message",
                 str(count_trailing_json),
             )
 
@@ -412,20 +590,23 @@ class ApiTester:
             expect_allowed_list=True,
         )
 
-        # 2.1) 大小写/空白兼容
-        mixed_case_method = self.request("/random-img", query={"m": "ReDiReCt"}, follow_redirects=False)
-        self.assert_true(mixed_case_method.status == 302, "mixed-case method redirect status", f"status={mixed_case_method.status}")
+        # 2.1) 大小写/空白兼容（redirect 模式）
+        if ENABLE_REDIRECT_TESTS:
+            mixed_case_method = self.request("/random-img", query={"m": "ReDiReCt"}, follow_redirects=False)
+            self.assert_true(mixed_case_method.status == 302, "mixed-case method redirect status", f"status={mixed_case_method.status}")
 
-        mixed_case_device_brightness = self.request(
-            "/random-img",
-            query={"d": "PC", "b": "LiGhT", "m": "redirect"},
-            follow_redirects=False,
-        )
-        self.assert_true(
-            mixed_case_device_brightness.status in {302, 404},
-            "mixed-case device/brightness status",
-            f"status={mixed_case_device_brightness.status}",
-        )
+            mixed_case_device_brightness = self.request(
+                "/random-img",
+                query={"d": "PC", "b": "LiGhT", "m": "redirect"},
+                follow_redirects=False,
+            )
+            self.assert_true(
+                mixed_case_device_brightness.status in {302, 404},
+                "mixed-case device/brightness status",
+                f"status={mixed_case_device_brightness.status}",
+            )
+        else:
+            print("[SKIP] 已关闭 redirect 测试，跳过 mixed-case redirect 断言")
 
         # 3) 默认请求（proxy）
         default_img = self.request("/random-img")
@@ -438,37 +619,80 @@ class ApiTester:
         self.assert_true(len(default_img.body) > 0, "GET /random-img default body non-empty")
 
         # 4) 重定向模式
-        redirect_any = self.request("/random-img", query={"m": "redirect"}, follow_redirects=False)
-        self.assert_true(redirect_any.status == 302, "GET /random-img?m=redirect status")
-        location = redirect_any.headers.get("location", "")
-        self.assert_true(bool(location), "GET /random-img?m=redirect location present")
-        self.assert_true(len(redirect_any.body) == 0, "GET /random-img?m=redirect empty body", f"len={len(redirect_any.body)}")
-        self.assert_redirect_asset_base(location, "GET /random-img?m=redirect asset base match")
-        self.assert_true(
-            bool(re.search(r"/random-img/(pc|mb)-(dark|light)/[a-z0-9_-]+/\d{6}\.webp$", location)),
-            "GET /random-img?m=redirect location format",
-            location,
-        )
+        if ENABLE_REDIRECT_TESTS:
+            redirect_any = self.request("/random-img", query={"m": "redirect"}, follow_redirects=False)
+            self.assert_true(redirect_any.status == 302, "GET /random-img?m=redirect status")
+            location = redirect_any.headers.get("location", "")
+            self.assert_true(bool(location), "GET /random-img?m=redirect location present")
+            self.assert_true(len(redirect_any.body) == 0, "GET /random-img?m=redirect empty body", f"len={len(redirect_any.body)}")
+            self.assert_redirect_asset_base(location, "GET /random-img?m=redirect asset base match")
+            self.assert_true(
+                bool(re.search(REDIRECT_LOCATION_PATTERN, location)),
+                "GET /random-img?m=redirect location format",
+                location,
+            )
+        else:
+            print("[SKIP] 已关闭 redirect 测试，跳过 m=redirect 行为断言")
 
         # 5) 基于统计数据做组合覆盖
         nonzero_details = [
-            row for row in theme_details
-            if isinstance(row, dict)
-            and int(row.get("count", 0)) > 0
-            and row.get("device") in {"pc", "mb"}
-            and row.get("brightness") in {"dark", "light"}
-            and isinstance(row.get("theme"), str)
+            row for row in normalized_theme_details
+            if int(row["count"]) > 0
         ]
         zero_details = [
-            row for row in theme_details
-            if isinstance(row, dict)
-            and int(row.get("count", 0)) == 0
-            and row.get("device") in {"pc", "mb"}
-            and row.get("brightness") in {"dark", "light"}
-            and isinstance(row.get("theme"), str)
+            row for row in normalized_theme_details
+            if int(row["count"]) == 0
         ]
 
         self.assert_true(len(nonzero_details) > 0, "存在可用组合（count>0）")
+
+        # 基于 groupTotals，校验仅传 device+brightness 时的行为与统计结果一致
+        for device in sorted(SUPPORTED_DEVICES):
+            for brightness in sorted(SUPPORTED_BRIGHTNESS):
+                group_key = f"{device}-{brightness}"
+                group_count = int(group_totals.get(group_key, 0))
+                if group_count > 0:
+                    if ENABLE_REDIRECT_TESTS:
+                        group_redirect = self.request(
+                            "/random-img",
+                            query={"d": device, "b": brightness, "m": "redirect"},
+                            follow_redirects=False,
+                        )
+                        self.assert_true(
+                            group_redirect.status == 302,
+                            f"group {group_key} redirect status",
+                            f"status={group_redirect.status}",
+                        )
+                        group_location = group_redirect.headers.get("location", "")
+                        self.assert_true(
+                            f"/{group_key}/" in group_location,
+                            f"group {group_key} redirect location",
+                            group_location,
+                        )
+                    else:
+                        group_proxy = self.request(
+                            "/random-img",
+                            query={"d": device, "b": brightness},
+                            follow_redirects=True,
+                        )
+                        self.assert_true(
+                            group_proxy.status == 200,
+                            f"group {group_key} proxy status",
+                            f"status={group_proxy.status}",
+                        )
+                        self.assert_true(
+                            len(group_proxy.body) > 0,
+                            f"group {group_key} proxy body non-empty",
+                            f"len={len(group_proxy.body)}",
+                        )
+                else:
+                    self.expect_json_error(
+                        "/random-img",
+                        {"d": device, "b": brightness},
+                        404,
+                        "No available images for the selected filters",
+                        f"group {group_key} has no images",
+                    )
 
         # 6.1) 多主题参数覆盖（t=fddm,wlop 与 t=fddm&t=wlop）
         themes_by_group: dict[tuple[str, str], list[str]] = {}
@@ -491,37 +715,60 @@ class ApiTester:
             d, b, themes = multi_theme_group
             t1, t2 = themes[0], themes[1]
 
-            multi_csv = self.request(
-                "/random-img",
-                query={"d": d, "b": b, "t": f"{t1},{t2}", "m": "redirect"},
-                follow_redirects=False,
-            )
-            self.assert_true(multi_csv.status == 302, "multi-theme csv redirect status", f"status={multi_csv.status}")
-            multi_csv_loc = multi_csv.headers.get("location", "")
-            self.assert_true(
-                f"/{d}-{b}/{t1}/" in multi_csv_loc or f"/{d}-{b}/{t2}/" in multi_csv_loc,
-                "multi-theme csv picks one requested theme",
-                multi_csv_loc,
-            )
+            if ENABLE_REDIRECT_TESTS:
+                multi_csv = self.request(
+                    "/random-img",
+                    query={"d": d, "b": b, "t": f"{t1},{t2}", "m": "redirect"},
+                    follow_redirects=False,
+                )
+                self.assert_true(multi_csv.status == 302, "multi-theme csv redirect status", f"status={multi_csv.status}")
+                multi_csv_loc = multi_csv.headers.get("location", "")
+                self.assert_true(
+                    f"/{d}-{b}/{t1}/" in multi_csv_loc or f"/{d}-{b}/{t2}/" in multi_csv_loc,
+                    "multi-theme csv picks one requested theme",
+                    multi_csv_loc,
+                )
 
-            repeated_query = urllib.parse.urlencode(
-                [("d", d), ("b", b), ("t", t1), ("t", t2), ("m", "redirect")]
-            )
-            multi_repeat = self.request(
-                f"/random-img?{repeated_query}",
-                follow_redirects=False,
-            )
-            self.assert_true(
-                multi_repeat.status == 302,
-                "multi-theme repeated param redirect status",
-                f"status={multi_repeat.status}",
-            )
-            multi_repeat_loc = multi_repeat.headers.get("location", "")
-            self.assert_true(
-                f"/{d}-{b}/{t1}/" in multi_repeat_loc or f"/{d}-{b}/{t2}/" in multi_repeat_loc,
-                "multi-theme repeated param picks one requested theme",
-                multi_repeat_loc,
-            )
+                repeated_query = urllib.parse.urlencode(
+                    [("d", d), ("b", b), ("t", t1), ("t", t2), ("m", "redirect")]
+                )
+                multi_repeat = self.request(
+                    f"/random-img?{repeated_query}",
+                    follow_redirects=False,
+                )
+                self.assert_true(
+                    multi_repeat.status == 302,
+                    "multi-theme repeated param redirect status",
+                    f"status={multi_repeat.status}",
+                )
+                multi_repeat_loc = multi_repeat.headers.get("location", "")
+                self.assert_true(
+                    f"/{d}-{b}/{t1}/" in multi_repeat_loc or f"/{d}-{b}/{t2}/" in multi_repeat_loc,
+                    "multi-theme repeated param picks one requested theme",
+                    multi_repeat_loc,
+                )
+            else:
+                multi_csv = self.request(
+                    "/random-img",
+                    query={"d": d, "b": b, "t": f"{t1},{t2}"},
+                    follow_redirects=True,
+                )
+                self.assert_true(multi_csv.status == 200, "multi-theme csv proxy status", f"status={multi_csv.status}")
+                self.assert_true(len(multi_csv.body) > 0, "multi-theme csv proxy body non-empty")
+
+                repeated_query = urllib.parse.urlencode(
+                    [("d", d), ("b", b), ("t", t1), ("t", t2)]
+                )
+                multi_repeat = self.request(
+                    f"/random-img?{repeated_query}",
+                    follow_redirects=True,
+                )
+                self.assert_true(
+                    multi_repeat.status == 200,
+                    "multi-theme repeated param proxy status",
+                    f"status={multi_repeat.status}",
+                )
+                self.assert_true(len(multi_repeat.body) > 0, "multi-theme repeated param proxy body non-empty")
 
             self.expect_json_error(
                 "/random-img",
@@ -549,40 +796,48 @@ class ApiTester:
                 )
 
             # 去重：同一个主题重复传入不应报错
-            repeated_same_theme = urllib.parse.urlencode(
-                [("d", d), ("b", b), ("t", t1), ("t", t1), ("m", "redirect")]
+            repeated_same_theme_params: list[tuple[str, str]] = [("d", d), ("b", b), ("t", t1), ("t", t1)]
+            if ENABLE_REDIRECT_TESTS:
+                repeated_same_theme_params.append(("m", "redirect"))
+            repeated_same_theme = urllib.parse.urlencode(repeated_same_theme_params)
+            repeated_same = self.request(
+                f"/random-img?{repeated_same_theme}",
+                follow_redirects=not ENABLE_REDIRECT_TESTS,
             )
-            repeated_same = self.request(f"/random-img?{repeated_same_theme}", follow_redirects=False)
             self.assert_true(
-                repeated_same.status == 302,
+                repeated_same.status == (302 if ENABLE_REDIRECT_TESTS else 200),
                 "repeated same theme still works",
                 f"status={repeated_same.status}",
             )
 
             # 去空白：包含空白与空 token 的 t 仍可正确处理
+            theme_with_spaces_query: dict[str, str] = {"d": d, "b": b, "t": f" {t1} , , {t2} "}
+            if ENABLE_REDIRECT_TESTS:
+                theme_with_spaces_query["m"] = "redirect"
             theme_with_spaces = self.request(
                 "/random-img",
-                query={"d": d, "b": b, "t": f" {t1} , , {t2} ", "m": "redirect"},
-                follow_redirects=False,
+                query=theme_with_spaces_query,
+                follow_redirects=not ENABLE_REDIRECT_TESTS,
             )
             self.assert_true(
-                theme_with_spaces.status == 302,
+                theme_with_spaces.status == (302 if ENABLE_REDIRECT_TESTS else 200),
                 "theme csv with spaces/empty tokens",
                 f"status={theme_with_spaces.status}",
             )
         else:
             print("[SKIP] 不存在同 device+brightness 下至少 2 个可用主题，跳过多主题断言")
 
-        # 每个有图组合都测一次 redirect + proxy
+        # 每个有图组合都测一次 proxy（可选附加 redirect）
         for row in nonzero_details:
             d, b, t = str(row["device"]), str(row["brightness"]), str(row["theme"])
             label_prefix = f"combo {d}-{b}-{t}"
 
-            rr = self.request("/random-img", query={"d": d, "b": b, "t": t, "m": "redirect"}, follow_redirects=False)
-            self.assert_true(rr.status == 302, f"{label_prefix} redirect status", f"status={rr.status}")
-            loc = rr.headers.get("location", "")
-            self.assert_redirect_asset_base(loc, f"{label_prefix} redirect asset base")
-            self.assert_true(f"/{d}-{b}/{t}/" in loc, f"{label_prefix} redirect location match", loc)
+            if ENABLE_REDIRECT_TESTS:
+                rr = self.request("/random-img", query={"d": d, "b": b, "t": t, "m": "redirect"}, follow_redirects=False)
+                self.assert_true(rr.status == 302, f"{label_prefix} redirect status", f"status={rr.status}")
+                loc = rr.headers.get("location", "")
+                self.assert_redirect_asset_base(loc, f"{label_prefix} redirect asset base")
+                self.assert_true(f"/{d}-{b}/{t}/" in loc, f"{label_prefix} redirect location match", loc)
 
             rp = self.request("/random-img", query={"d": d, "b": b, "t": t, "m": "proxy"}, follow_redirects=True)
             self.assert_true(rp.status == 200, f"{label_prefix} proxy status", f"status={rp.status}")
@@ -609,7 +864,7 @@ class ApiTester:
             theme_by_device_brightness.setdefault((d, b), set()).add(t)
 
         strict_theme_case: tuple[str, str, str] | None = None
-        for d in {"pc", "mb"}:
+        for d in SUPPORTED_DEVICES:
             dark_set = theme_by_device_brightness.get((d, "dark"), set())
             light_set = theme_by_device_brightness.get((d, "light"), set())
             dark_only = sorted(dark_set - light_set)
@@ -641,7 +896,7 @@ class ApiTester:
             print("[SKIP] 没找到 brightness 维度可区分的主题，跳过 strict theme 断言")
 
         # 选择一个“只在另一个设备存在”的主题，验证跨设备也判为合法参数，并返回无图（404）
-        device_theme_map: dict[str, set[str]] = {"pc": set(), "mb": set()}
+        device_theme_map: dict[str, set[str]] = {device: set() for device in SUPPORTED_DEVICES}
         for row in nonzero_details:
             device = str(row["device"])
             theme = str(row["theme"])
@@ -676,30 +931,42 @@ class ApiTester:
             print("[SKIP] 没找到 device 维度可区分的主题，跳过 cross-device theme 断言")
 
         # 6) 随机设备模式覆盖
-        valid_themes = sorted(str(k) for k, v in theme_totals.items() if int(v) > 0)
-        if valid_themes:
-            sample_theme = valid_themes[0]
-            rr = self.request(
-                "/random-img",
-                query={"d": "r", "b": "dark", "t": sample_theme, "m": "redirect"},
-                follow_redirects=False,
-            )
-            if rr.status == 302:
-                loc = rr.headers.get("location", "")
-                self.assert_redirect_asset_base(loc, "random device redirect asset base")
-                self.assert_true("/random-img/" in loc, "random device redirect location", loc)
-            else:
-                payload = self.parse_json(rr, "random device fallback json")
-                self.assert_true(
-                    rr.status in {404, 400},
-                    "random device status acceptable",
-                    f"status={rr.status}, body={payload}",
+        dark_themes = sorted({str(row["theme"]) for row in nonzero_details if str(row["brightness"]) == "dark"})
+        if dark_themes:
+            sample_theme = dark_themes[0]
+            if ENABLE_REDIRECT_TESTS:
+                rr = self.request(
+                    "/random-img",
+                    query={"d": "r", "b": "dark", "t": sample_theme, "m": "redirect"},
+                    follow_redirects=False,
                 )
+                self.assert_true(rr.status == 302, "random device with dark+theme status", f"status={rr.status}")
+                if rr.status == 302:
+                    loc = rr.headers.get("location", "")
+                    self.assert_redirect_asset_base(loc, "random device redirect asset base")
+                    self.assert_true(
+                        bool(re.search(rf"^{re.escape(self.asset_base_url)}(pc|mb)-dark/{re.escape(sample_theme)}/\d{{{IMAGE_FILENAME_DIGITS}}}\.webp$", loc)),
+                        "random device redirect location matches requested dark+theme",
+                        loc,
+                    )
+            else:
+                rr = self.request(
+                    "/random-img",
+                    query={"d": "r", "b": "dark", "t": sample_theme},
+                    follow_redirects=True,
+                )
+                self.assert_true(rr.status == 200, "random device with dark+theme proxy status", f"status={rr.status}")
+                self.assert_true(len(rr.body) > 0, "random device with dark+theme proxy body non-empty")
+        else:
+            print("[SKIP] dark 亮度下没有可用主题，跳过随机设备 dark+theme 断言")
 
         # 7) 稳定性抽样
-        for i in range(self.random_runs):
-            r = self.request("/random-img", query={"m": "redirect"}, follow_redirects=False)
-            self.assert_true(r.status == 302, f"random stability redirect #{i + 1}", f"status={r.status}")
+        if ENABLE_REDIRECT_TESTS:
+            for i in range(self.random_runs):
+                r = self.request("/random-img", query={"m": "redirect"}, follow_redirects=False)
+                self.assert_true(r.status == 302, f"random stability redirect #{i + 1}", f"status={r.status}")
+        else:
+            print("[SKIP] 已关闭 redirect 测试，跳过 redirect 稳定性抽样")
 
         # 8) 全量无图场景（条件触发）
         if int(count_data.get("totalImages", 0)) == 0:
@@ -714,19 +981,8 @@ class ApiTester:
         else:
             print("[SKIP] totalImages > 0，跳过全量无图断言")
 
-        hard_required_error_keys = {
-            "INVALID_QUERY_PARAMS",
-            "INVALID_DEVICE",
-            "INVALID_BRIGHTNESS",
-            "INVALID_METHOD",
-            "INVALID_THEME",
-            "INVALID_COUNT_REQUEST",
-            "NOT_FOUND",
-        }
-        optional_error_keys = {"NO_IMAGES_FOR_COMBINATION", "NO_AVAILABLE_IMAGES"}
-
-        missing_hard = sorted(k for k in hard_required_error_keys if not self.error_coverage.get(k, False))
-        missing_optional = sorted(k for k in optional_error_keys if not self.error_coverage.get(k, False))
+        missing_hard = sorted(k for k in REQUIRED_ERROR_COVERAGE_KEYS if not self.error_coverage.get(k, False))
+        missing_optional = sorted(k for k in OPTIONAL_ERROR_COVERAGE_KEYS if not self.error_coverage.get(k, False))
 
         self.assert_true(len(missing_hard) == 0, "hard error coverage complete", f"missing={missing_hard}")
         if missing_optional:
@@ -750,7 +1006,7 @@ class ApiTester:
 
 def main() -> None:
     tester = ApiTester(
-        base_url=BASE_URL,
+        api_base_url=API_BASE_URL,
         asset_base_url=ASSET_BASE_URL,
         timeout=TIMEOUT_SECONDS,
         random_runs=RANDOM_RUNS,

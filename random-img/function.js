@@ -9,6 +9,8 @@ const REQUEST_DEVICES = [...MAP_DEVICES, "r"];
 const BRIGHTNESS_VALUES = ["dark", "light"];
 const METHOD_VALUES = ["proxy", "redirect"];
 
+const FORCE_REDIRECT_ENABLED = true;
+
 const ALLOWED_PARAMS_SET = new Set(ALLOWED_PARAMS);
 const REQUEST_DEVICE_SET = new Set(REQUEST_DEVICES);
 const BRIGHTNESS_SET = new Set(BRIGHTNESS_VALUES);
@@ -18,6 +20,8 @@ const BASE_IMAGE_URL_KEY = "BASE_IMAGE_URL";
 const FOLDER_MAP_KEY = "FOLDER_MAP";
 const KV_NAMESPACE = "random-img-config";
 const KV_CACHE_TTL_MS = 60 * 1000;
+
+const RANDOM_IMG_COUNT_PATH_KEY = "RANDOM_IMG_COUNT_PATH";
 
 // 懒初始化并复用同一个 EdgeKV 客户端：仅在真正读取 KV 时创建。
 let edgeKVClient = null;
@@ -37,7 +41,7 @@ const RANDOM_IMG_ERRORS = {
 	INVALID_BRIGHTNESS: { status: 400, message: "Bad Request: Invalid brightness" },
 	INVALID_THEME: { status: 400, message: "Bad Request: Invalid theme" },
 	INVALID_METHOD: { status: 400, message: "Bad Request: Invalid method" },
-	INVALID_COUNT_REQUEST: { status: 403, message: "Forbidden: /random-img-count only accepts exact path without query parameters" },
+	INVALID_COUNT_REQUEST: { status: 403, message: "Forbidden: Image count path only accepts exact path without query parameters" },
 	BASE_IMAGE_URL_CONFIG_ERROR: { status: 500, message: "Internal Server Error: BASE_IMAGE_URL is invalid or missing in KV" },
 	FOLDER_MAP_CONFIG_ERROR: { status: 500, message: "Internal Server Error: FOLDER_MAP is invalid or missing in KV" },
 	NO_IMAGES_FOR_COMBINATION: { status: 404, message: "Not Found: No available images for the selected filters" },
@@ -277,8 +281,10 @@ export const handleRandomImg = async (request) => {
 
 	// 读取 method 参数，缺省时默认使用 proxy。
 	const method = params.get("m")?.toLowerCase() || "proxy";
+	// 强制开关：若关闭重定向，则无论参数如何都用 proxy
+	const effectiveMethod = FORCE_REDIRECT_ENABLED ? method : "proxy";
 
-	// 校验 method 参数：仅允许 proxy 或 redirect（优先返回，避免无效请求触发 KV 读取）
+	// 校验 method 参数：仅允许 proxy 或 redirect
 	// 判断 method 是否在允许集合内。
 	if (!METHOD_SET.has(method)) {
 		return invalidFieldError(RANDOM_IMG_ERRORS.INVALID_METHOD, "m", method, METHOD_VALUES);
@@ -291,7 +297,7 @@ export const handleRandomImg = async (request) => {
 		return invalidFieldError(RANDOM_IMG_ERRORS.INVALID_DEVICE, "d", requestedDevice, REQUEST_DEVICES);
 	}
 
-	// 设备选择优先级：用户输入 > UA 自动判断 > r（随机设备）。
+	// 设备选择逻辑：优先使用请求参数，其次根据 User-Agent 判断移动/桌面，最后退回默认设备 "r"（random）。
 	let autoDevice = "r";
 	if (!requestedDevice) {
 		const userAgent = request.headers.get("User-Agent") || "";
@@ -422,7 +428,7 @@ export const handleRandomImg = async (request) => {
 		return detailedErrorResponse(RANDOM_IMG_ERRORS.BASE_IMAGE_URL_CONFIG_ERROR, BASE_IMAGE_URL_CONFIG_ERROR_DETAILS);
 	}
 
-	return await respondImageByMethod(method, buildImageUrl(baseImageUrl, selectedFolder));
+	return await respondImageByMethod(effectiveMethod, buildImageUrl(baseImageUrl, selectedFolder));
 };
 
 const buildRandomImgCountData = (folderMap) => {
@@ -459,7 +465,15 @@ const buildRandomImgCountData = (folderMap) => {
 
 export const handleRandomImgCount = async (request) => {
 	const url = new URL(request.url);
-	if (url.pathname !== "/random-img-count" || url.search) {
+	const randomImgCountPath = await getKvText(RANDOM_IMG_COUNT_PATH_KEY);
+	if (!randomImgCountPath) {
+		return detailedErrorResponse(RANDOM_IMG_ERRORS.FOLDER_MAP_CONFIG_ERROR, {
+			configKey: RANDOM_IMG_COUNT_PATH_KEY,
+			namespace: KV_NAMESPACE,
+			hint: "计数接口路径未配置，请在 KV 中设置 RANDOM_IMG_COUNT_PATH"
+		});
+	}
+	if (url.pathname !== randomImgCountPath || url.search) {
 		return detailedErrorResponse(RANDOM_IMG_ERRORS.INVALID_COUNT_REQUEST);
 	}
 	const { folderMap, errorKey: folderMapErrorKey } = await getFolderMapFromKV();
