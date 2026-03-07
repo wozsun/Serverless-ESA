@@ -11,8 +11,7 @@ jobs:
     permissions:
       contents: read
     env:
-      BASE_URL: ${{ secrets.BASE_URL }}
-      ASSET_BASE_URL: ${{ secrets.ASSET_BASE_URL }}
+      CONFIG: ${{ secrets.CONFIG }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,12 +23,8 @@ jobs:
 
       - name: Validate required env vars
         run: |
-          if [ -z "$BASE_URL" ]; then
-            echo "BASE_URL is required (set repository secret BASE_URL)"
-            exit 1
-          fi
-          if [ -z "$ASSET_BASE_URL" ]; then
-            echo "ASSET_BASE_URL is required (set repository secret ASSET_BASE_URL)"
+          if [ -z "$CONFIG" ]; then
+            echo "CONFIG is required (set repository secret CONFIG)"
             exit 1
           fi
 
