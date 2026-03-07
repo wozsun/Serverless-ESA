@@ -3,15 +3,19 @@ from __future__ import annotations
 
 import json
 import os
-import sys
+import socket
+import ssl
+import time
+import http.client
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 CONFIG_ENV_NAME = "CONFIG"
 TIMEOUT_SECONDS = 20
+MAX_NETWORK_RETRIES = 5
+RETRY_BACKOFF_BASE_SECONDS = 1
 
 
 @dataclass
@@ -55,18 +59,40 @@ def load_api_base_url_from_config() -> str:
     return base_url.rstrip("/")
 
 
-def request_json(base_url: str, path: str) -> tuple[int, dict[str, str], Any]:
+def request_json(base_url: str, path: str) -> tuple[int, Any]:
     url = f"{base_url}{path}"
     req = urllib.request.Request(url, method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
-            status = resp.getcode()
-            headers = {k.lower(): v for k, v in resp.headers.items()}
-            body = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        status = exc.code
-        headers = {k.lower(): v for k, v in exc.headers.items()}
-        body = exc.read().decode("utf-8", errors="replace")
+
+    network_retries = 0
+    while True:
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+                status = resp.getcode()
+                headers = {k.lower(): v for k, v in resp.headers.items()}
+                body = resp.read().decode("utf-8", errors="replace")
+                break
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            headers = {k.lower(): v for k, v in exc.headers.items()}
+            body = exc.read().decode("utf-8", errors="replace")
+            break
+        except (
+            urllib.error.URLError,
+            socket.timeout,
+            TimeoutError,
+            ssl.SSLError,
+            http.client.IncompleteRead,
+            http.client.RemoteDisconnected,
+            ConnectionResetError,
+            OSError,
+        ) as exc:
+            if network_retries >= MAX_NETWORK_RETRIES:
+                fail(
+                    f"{path} request failed after retries: {exc} "
+                    f"(retries={network_retries})"
+                )
+            network_retries += 1
+            time.sleep(RETRY_BACKOFF_BASE_SECONDS * network_retries)
 
     content_type = headers.get("content-type", "")
     if "application/json" not in content_type:
@@ -77,11 +103,11 @@ def request_json(base_url: str, path: str) -> tuple[int, dict[str, str], Any]:
     except json.JSONDecodeError as exc:
         fail(f"{path} response is not valid JSON: {exc}; body={body[:200]}")
 
-    return status, headers, payload
+    return status, payload
 
 
 def assert_route(base_url: str, route: ExpectedRoute) -> None:
-    status, _headers, payload = request_json(base_url, route.path)
+    status, payload = request_json(base_url, route.path)
 
     if status != route.expected_status:
         fail(f"{route.path} status={status}, expected={route.expected_status}")

@@ -18,6 +18,8 @@ const REQUEST_DEVICES = [...MAP_DEVICES, "r"];
 const BRIGHTNESS_VALUES = ["dark", "light"];
 const METHOD_VALUES = ["proxy", "redirect"];
 const IMAGE_FILENAME_DIGITS = 5;
+const UPSTREAM_FETCH_MAX_ATTEMPTS = 3;
+const UPSTREAM_FETCH_RETRY_BASE_DELAY_MS = 100;
 
 const REDIRECT_ENABLED = true;
 
@@ -25,6 +27,7 @@ const ALLOWED_PARAMS_SET = new Set(ALLOWED_PARAMS);
 const REQUEST_DEVICE_SET = new Set(REQUEST_DEVICES);
 const BRIGHTNESS_SET = new Set(BRIGHTNESS_VALUES);
 const METHOD_SET = new Set(METHOD_VALUES);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 
 // ===========================
@@ -163,31 +166,37 @@ const respondImageByMethod = async (method, imageUrl) => {
 		});
 	}
 
-	try {
-		const upstreamResponse = await fetch(imageUrl);
+	for (let attempt = 1; attempt <= UPSTREAM_FETCH_MAX_ATTEMPTS; attempt++) {
+		try {
+			const upstreamResponse = await fetch(imageUrl);
 
-		if (!upstreamResponse.ok) {
-			return detailedErrorResponse(RANDOM_IMG_ERRORS.UPSTREAM_BAD_STATUS, {
-				upstreamStatus: upstreamResponse.status,
-				upstreamStatusText: upstreamResponse.statusText || undefined,
-				hint: "Upstream responded but did not return a success status",
+			if (!upstreamResponse.ok) {
+				return detailedErrorResponse(RANDOM_IMG_ERRORS.UPSTREAM_BAD_STATUS, {
+					upstreamStatus: upstreamResponse.status,
+					upstreamStatusText: upstreamResponse.statusText || undefined,
+					hint: "Upstream responded but did not return a success status",
+				});
+			}
+
+			return new Response(upstreamResponse.body, {
+				status: upstreamResponse.status,
+				headers: upstreamResponse.headers,
 			});
+		} catch {
+			if (attempt >= UPSTREAM_FETCH_MAX_ATTEMPTS) {
+				return detailedErrorResponse(RANDOM_IMG_ERRORS.UPSTREAM_FETCH_EXCEPTION, {
+					hint: "Upstream request failed before receiving a valid response",
+					retryAttempts: attempt,
+				});
+			}
+			await sleep(UPSTREAM_FETCH_RETRY_BASE_DELAY_MS * attempt);
 		}
-
-		const headers = new Headers(upstreamResponse.headers);
-		if (!headers.has("Cache-Control")) {
-			headers.set("Cache-Control", "public, max-age=3600");
-		}
-
-		return new Response(upstreamResponse.body, {
-			status: upstreamResponse.status,
-			headers,
-		});
-	} catch {
-		return detailedErrorResponse(RANDOM_IMG_ERRORS.UPSTREAM_FETCH_EXCEPTION, {
-			hint: "Upstream request failed before receiving a valid response",
-		});
 	}
+
+	return detailedErrorResponse(RANDOM_IMG_ERRORS.UPSTREAM_FETCH_EXCEPTION, {
+		hint: "Upstream request failed before receiving a valid response",
+		retryAttempts: UPSTREAM_FETCH_MAX_ATTEMPTS,
+	});
 };
 
 // ===========================
@@ -392,7 +401,7 @@ const buildRandomImgCountData = (folderMap) => {
 	};
 };
 
-export const handleRandomImgCount = async (request) => {
+export const handleRandomImgCount = async () => {
 	const { folderMap, errorKey: folderMapErrorKey } = await getFolderMapFromKV();
 	if (folderMapErrorKey) {
 		return detailedErrorResponse(RANDOM_IMG_ERRORS[folderMapErrorKey], FOLDER_MAP_CONFIG_ERROR_DETAILS);
