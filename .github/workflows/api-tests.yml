@@ -1,13 +1,13 @@
-name: Random Img Test
+name: API Tests
 
 on:
   push:
   workflow_dispatch:
 
 jobs:
-  random-img-test:
+  api-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: read
     env:
@@ -31,6 +31,10 @@ jobs:
       - name: Wait for deployment propagation
         run: sleep 60
 
-      - name: Run test
+      - name: Run main route tests
+        shell: bash
+        run: python main/test.py
+
+      - name: Run random image tests
         shell: bash
         run: python random-img/test.py
