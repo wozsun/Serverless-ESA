@@ -170,7 +170,7 @@ const parseBoolean = (line) => {
 	return null;
 };
 
-// 解析严格 JSON 对象：仅接受普通对象，不接受数组或其他类型
+// 解析严格 JSON 对象：仅接受顶层对象
 const parseJsonObject = (text) => {
 	if (!text) {
 		return null;
@@ -217,19 +217,24 @@ const parseText = (line) => line || null;
 // 解析多行文本
 const parseTextLines = (lines) => (lines && lines.length > 0 ? lines : null);
 
-// 将单行逗号分隔文本解析为字符串数组
+// 将单行文本解析为数组（必须为合法 JSON 数组）
 const parseArray = (line) => {
-	if (!line) {
+	const text = parseText(line);
+	if (!text) {
 		return null;
 	}
-	const items = line
-		.split(",")
-		.map((item) => item.trim())
-		.filter(Boolean);
-	return items.length > 0 ? items : null;
+	try {
+		const parsed = JSON.parse(text);
+		if (!Array.isArray(parsed) || parsed.length === 0) {
+			return null;
+		}
+		return parsed;
+	} catch {
+		return null;
+	}
 };
 
-// 将每行逗号分隔文本解析为二维字符串数组
+// 将每行文本解析为二维数组（每行必须为合法 JSON 数组）
 const parseArrayLines = (lines) => {
 	if (!lines) {
 		return null;
@@ -371,14 +376,14 @@ export const getKvTextLinesCached = createTypedKvGetter({
 	parser: parseTextLines,
 });
 
-// 7) 单行数组（逗号分隔）
+// 7) 单行数组（合法 JSON 数组）
 export const getKvArrayCached = createTypedKvGetter({
 	cacheStore: cacheStores.array,
 	sourceType: SOURCE_TYPE.SINGLE_LINE,
 	parser: parseArray,
 });
 
-// 8) 多行数组（每行逗号分隔）
+// 8) 多行数组（每行均为合法 JSON 数组）
 export const getKvArrayLinesCached = createTypedKvGetter({
 	cacheStore: cacheStores.arrayLines,
 	sourceType: SOURCE_TYPE.LINES,
