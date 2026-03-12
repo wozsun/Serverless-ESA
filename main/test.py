@@ -136,7 +136,7 @@ def main() -> None:
     print("Testing main routes with CONFIG.API_BASE_URL")
 
     routes = [
-        ExpectedRoute(path="/", expected_status=404, expected_payload_status=404, expected_message="API Not Found"),
+        ExpectedRoute(path="/", expected_status=404, expected_payload_status=404, expected_message="No API route specified"),
         ExpectedRoute(path="/hello", expected_status=200, expected_payload_status=None, expected_message="Hello, World!"),
         ExpectedRoute(
             path="/healthcheck",

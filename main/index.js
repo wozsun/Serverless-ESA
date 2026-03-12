@@ -3,16 +3,6 @@ import { getKvTextCached } from "./kv.js";
 import { detailedErrorResponse, jsonErrorResponse, jsonSuccessResponse } from "./response.js";
 
 // ===========================
-// 全局错误定义
-// ===========================
-const GLOBAL_ERRORS = {
-	NOT_FOUND: { status: 404, message: "API Not Found" },
-	INTERNAL_ERROR: { status: 500, message: "Internal Server Error" },
-	HIDDEN_ROUTE_QUERY_NOT_ALLOWED: { status: 403, message: "Forbidden: Routes do not accept query parameters" },
-	HIDDEN_ROUTE_HANDLER_NOT_FOUND: { status: 500, message: "Internal Server Error: Route handler is not configured" },
-};
-
-// ===========================
 // 可配置参数（优先编辑此区域）
 // ===========================
 const PATH_CONFIG_NAMESPACE = "path-config";
@@ -23,7 +13,7 @@ const HIDDEN_PATH_KEYS = ["RANDOM_IMG_COUNT_PATH"];
 // - 固定 handler: 直接传函数
 // - 业务模块: 传模块导出对象，按 handleXxx 自动匹配
 const ROUTES = {
-	"/": async () => jsonErrorResponse(GLOBAL_ERRORS.NOT_FOUND),
+	"/": async () => jsonErrorResponse({ status: 404, message: "No API route specified" }),
 	"/hello": async () => jsonSuccessResponse({ message: "Hello, World!" }),
 	"/healthcheck": async () => jsonSuccessResponse({ message: "API on EdgeFunction is healthy" }),
 	"/random-img": randomImgHandlers,
@@ -136,7 +126,7 @@ const resolveHiddenPathRoute = async (url, request) => {
 
 		if (dynamicPath && pathname === dynamicPath) {
 			if (search) {
-				return detailedErrorResponse(GLOBAL_ERRORS.HIDDEN_ROUTE_QUERY_NOT_ALLOWED, {
+				return detailedErrorResponse({ status: 403, message: "Forbidden: Routes do not accept query parameters" }, {
 					hint: "Call hidden routes with exact path and no query string",
 				});
 			}
@@ -146,7 +136,7 @@ const resolveHiddenPathRoute = async (url, request) => {
 				return await handler(request);
 			}
 
-			return detailedErrorResponse(GLOBAL_ERRORS.HIDDEN_ROUTE_HANDLER_NOT_FOUND, {
+			return detailedErrorResponse({ status: 500, message: "Internal Server Error: Route handler is not configured" }, {
 				hint: "Check hidden route key to handler naming convention",
 			});
 		}
@@ -175,11 +165,11 @@ export default {
 				return hiddenPathResponse;
 			}
 
-			return jsonErrorResponse(GLOBAL_ERRORS.NOT_FOUND);
+			return jsonErrorResponse({ status: 404, message: "API Not Found" });
 		} catch (error) {
 			// 捕获未预期的错误，避免函数崩溃
 			console.error("Unhandled error in edge function:", error instanceof Error ? error.message : "unknown");
-			return jsonErrorResponse(GLOBAL_ERRORS.INTERNAL_ERROR);
+			return jsonErrorResponse({ status: 500, message: "Internal Server Error" });
 		}
 	},
 };
