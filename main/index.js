@@ -57,7 +57,7 @@ const resolveRouteHandler = async (pathname) => {
 		return routeEntry;
 	}
 
-	if (!routeEntry || typeof routeEntry !== "object") {
+	if (typeof routeEntry !== "object") {
 		return null;
 	}
 
