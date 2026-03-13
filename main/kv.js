@@ -129,12 +129,6 @@ const fetchFromKv = async ({ namespace, key, type }) => {
 	return null;
 };
 
-// 从 KV 拉取原始文本（type: "text"）
-const fetchRawTextFromKv = ({ namespace, key }) => fetchFromKv({ namespace, key, type: "text" });
-
-// 从 KV 拉取 JSON 对象（type: "json"）
-const fetchJsonFromKv = ({ namespace, key }) => fetchFromKv({ namespace, key, type: "json" });
-
 // 带缓存获取归一化后的源数据载荷
 const getNormalizedSourceCached = async ({
 	namespace,
@@ -147,7 +141,7 @@ const getNormalizedSourceCached = async ({
 		cacheStore: cacheStores.raw,
 		id,
 		ttlMs,
-		loader: async () => normalizeRawText(await fetchRawTextFromKv({ namespace, key })),
+		loader: async () => normalizeRawText(await fetchFromKv({ namespace, key, type: "text" })),
 	});
 };
 
@@ -185,9 +179,6 @@ const parseText = (line) => line || null;
 // 解析多行文本
 const parseTextLines = (lines) => (lines && lines.length > 0 ? lines : null);
 
-// 规范化 URL：确保以 '/' 结尾
-const normalizeUrlWithTrailingSlash = (url) => (url.endsWith("/") ? url : `${url}/`);
-
 // 解析并规范化单行 URL
 const parseUrl = (line) => {
 	if (!line) {
@@ -195,7 +186,8 @@ const parseUrl = (line) => {
 	}
 	try {
 		const parsed = new URL(line);
-		return normalizeUrlWithTrailingSlash(parsed.toString());
+		const normalized = parsed.toString();
+		return normalized.endsWith("/") ? normalized : `${normalized}/`;
 	} catch {
 		return null;
 	}
@@ -221,23 +213,15 @@ const parseUrlLines = (lines) => {
 // Getter 工厂
 // ===========================
 
-// source 片段类型：决定 parser 拿到的是"单行"还是"多行数组"。
-const SOURCE_TYPE = {
-	// 严格单行：仅当归一化后恰好一行时才返回值。
-	SINGLE_LINE: "single-line",
-	// 按行数组：返回所有非空行组成的 string[]。
-	LINES: "lines",
-};
-
 // 根据 sourceType 从归一化载荷中提取对应片段
 const pickSource = (payload, sourceType) => {
 	if (!payload) {
 		return null;
 	}
-	if (sourceType === SOURCE_TYPE.SINGLE_LINE) {
+	if (sourceType === "line") {
 		return toSingleLine(payload);
 	}
-	if (sourceType === SOURCE_TYPE.LINES) {
+	if (sourceType === "lines") {
 		return payload.lines;
 	}
 	return null;
@@ -267,7 +251,7 @@ const createTypedKvGetter = ({ cacheStore, sourceType, parser }) => {
 // 1) 严格布尔值（单行 true/false，大小写不敏感）
 export const getKvBooleanCached = createTypedKvGetter({
 	cacheStore: cacheStores.boolean,
-	sourceType: SOURCE_TYPE.SINGLE_LINE,
+	sourceType: "line",
 	parser: parseBoolean,
 });
 
@@ -278,42 +262,42 @@ export const getKvJsonObjectCached = async ({ namespace, key, cacheKey = "", ttl
 		cacheStore: cacheStores.jsonObject,
 		id,
 		ttlMs,
-		loader: () => fetchJsonFromKv({ namespace, key }),
+		loader: () => fetchFromKv({ namespace, key, type: "json" }),
 	});
 };
 
 // 3) 单行数字
 export const getKvNumberCached = createTypedKvGetter({
 	cacheStore: cacheStores.number,
-	sourceType: SOURCE_TYPE.SINGLE_LINE,
+	sourceType: "line",
 	parser: parseNumber,
 });
 
 // 4) 单行文本
 export const getKvTextCached = createTypedKvGetter({
 	cacheStore: cacheStores.text,
-	sourceType: SOURCE_TYPE.SINGLE_LINE,
+	sourceType: "line",
 	parser: parseText,
 });
 
 // 5) 多行文本
 export const getKvTextLinesCached = createTypedKvGetter({
 	cacheStore: cacheStores.textLines,
-	sourceType: SOURCE_TYPE.LINES,
+	sourceType: "lines",
 	parser: parseTextLines,
 });
 
 // 6) 单行 URL
 export const getKvUrlCached = createTypedKvGetter({
 	cacheStore: cacheStores.url,
-	sourceType: SOURCE_TYPE.SINGLE_LINE,
+	sourceType: "line",
 	parser: parseUrl,
 });
 
 // 7) 多行 URL
 export const getKvUrlLinesCached = createTypedKvGetter({
 	cacheStore: cacheStores.urlLines,
-	sourceType: SOURCE_TYPE.LINES,
+	sourceType: "lines",
 	parser: parseUrlLines,
 });
 
