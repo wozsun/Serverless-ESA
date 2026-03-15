@@ -46,6 +46,7 @@ const RANDOM_IMG_ERRORS = {
 	FOLDER_MAP_CONFIG_ERROR: { status: 500, message: "Internal Server Error: FOLDER_MAP is invalid or missing in KV" },
 	NO_IMAGES_FOR_COMBINATION: { status: 404, message: "Not Found: No available images for the selected filters" },
 	NO_AVAILABLE_IMAGES: { status: 404, message: "Not Found: No available images" },
+	REDIRECT_RESPONSE_EXCEPTION: { status: 502, message: "Bad Gateway: Failed to construct redirect response" },
 	UPSTREAM_BAD_STATUS: { status: 502, message: "Bad Gateway: Upstream image service responded with a non-success status" },
 	UPSTREAM_FETCH_EXCEPTION: { status: 502, message: "Bad Gateway: Failed to reach upstream image service due to network/runtime exception" },
 };
@@ -164,10 +165,17 @@ const buildImageUrl = (baseImageUrl, selectedFolder) => {
 
 const respondImageByMethod = async (method, imageUrl) => {
 	if (method === "redirect") {
-		return new Response(null, {
-			status: 302,
-			headers: { Location: imageUrl },
-		});
+		try {
+			return new Response(null, {
+				status: 302,
+				headers: { Location: imageUrl },
+			});
+		} catch (error) {
+			return detailedErrorResponse(RANDOM_IMG_ERRORS.REDIRECT_RESPONSE_EXCEPTION, {
+				hint: "Redirect target is invalid for Location header",
+				errorName: error instanceof Error ? error.name : "unknown",
+			});
+		}
 	}
 
 	for (let attempt = 1; attempt <= UPSTREAM_FETCH_MAX_ATTEMPTS; attempt++) {
@@ -184,7 +192,9 @@ const respondImageByMethod = async (method, imageUrl) => {
 
 			return new Response(upstreamResponse.body, {
 				status: upstreamResponse.status,
-				headers: upstreamResponse.headers,
+				headers: {
+					"Content-Type": "image/webp",
+				},
 			});
 		} catch {
 			if (attempt >= UPSTREAM_FETCH_MAX_ATTEMPTS) {
