@@ -475,6 +475,7 @@ class ApiTester:
         expected_message_part: str,
         label: str,
         expected_detail_keys: list[str] | None = None,
+        forbidden_detail_keys: list[str] | None = None,
         expected_field: str | None = None,
         expected_received: str | None = None,
         expect_allowed_list: bool = False,
@@ -496,6 +497,7 @@ class ApiTester:
 
         if (
             expected_detail_keys is None
+            and forbidden_detail_keys is None
             and expected_field is None
             and expected_received is None
             and not expect_allowed_list
@@ -513,6 +515,12 @@ class ApiTester:
             for key in expected_detail_keys:
                 self.assert_true(
                     key in details, f"{label} (details.{key})", str(details)
+                )
+
+        if forbidden_detail_keys:
+            for key in forbidden_detail_keys:
+                self.assert_true(
+                    key not in details, f"{label} (details.{key} absent)", str(details)
                 )
 
         if expected_field is not None:
@@ -711,7 +719,7 @@ class ApiTester:
             "invalid theme",
             expected_field="t",
             expected_received="__nonexistent_theme__",
-            expect_allowed_list=True,
+            forbidden_detail_keys=["allowed"],
         )
         self.expect_json_error(
             "/random-img",
