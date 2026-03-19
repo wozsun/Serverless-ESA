@@ -5,13 +5,14 @@ import {
 	getKvUrlCached,
 } from "../main/kv.js";
 
+// ===========================
+// 随机图片 API 配置
+// ===========================
+
 const RANDOM_IMG_CONFIG_NAMESPACE = "random-img-config";
 const FOLDER_MAP_KEY = "FOLDER_MAP";
 const BASE_IMAGE_URL_KEY = "BASE_IMAGE_URL";
 
-// ===========================
-// 随机图片 API 配置
-// ===========================
 const ALLOWED_PARAMS = ["d", "b", "t", "m"];
 const MAP_DEVICES = ["pc", "mb"];
 const REQUEST_DEVICES = [...MAP_DEVICES, "r"];
@@ -31,6 +32,7 @@ const REQUEST_DEVICE_SET = new Set(REQUEST_DEVICES);
 const BRIGHTNESS_SET = new Set(BRIGHTNESS_VALUES);
 const METHOD_SET = new Set(METHOD_VALUES);
 
+// 异步等待指定毫秒数，供上游请求重试退避使用。
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 
@@ -65,7 +67,7 @@ const BASE_IMAGE_URL_CONFIG_ERROR_DETAILS = {
 };
 
 // 基于字段名、收到的值与允许值构造统一的参数校验错误响应。
-const invalidFieldError = (error, field, received, allowed) =>
+const buildInvalidFieldResponse = (error, field, received, allowed) =>
 	detailedErrorResponse(error, { field, received, allowed });
 
 // 检查查询参数是否都在白名单内，若存在非法参数则直接返回 400 错误响应。
@@ -104,6 +106,7 @@ const buildValidThemes = (folderMap) =>
 		)
 	);
 
+// 惰性更新有效主题缓存：仅当 folderMap 引用变化时重新计算。
 const ensureValidThemeCache = (folderMap) => {
 	if (validThemeCache.themes && validThemeCache.sourceRef === folderMap) {
 		return validThemeCache;
@@ -119,14 +122,6 @@ const ensureValidThemeCache = (folderMap) => {
 	return validThemeCache;
 };
 
-const getValidThemeSet = (folderMap) => {
-	return ensureValidThemeCache(folderMap).themeSet;
-};
-
-const getValidThemes = (folderMap) => {
-	return ensureValidThemeCache(folderMap).themes;
-};
-
 // 读取并校验 FOLDER_MAP 配置。
 const getFolderMapFromKV = async () => {
 	return getKvJsonObjectCached({
@@ -136,15 +131,7 @@ const getFolderMapFromKV = async () => {
 	});
 };
 
-// 读取 BASE_IMAGE_URL 并规范成以 `/` 结尾的可拼接基础地址。
-const getBaseImageUrlFromKV = async () => {
-	return getKvUrlCached({
-		namespace: RANDOM_IMG_CONFIG_NAMESPACE,
-		key: BASE_IMAGE_URL_KEY,
-		cacheKey: "random-img::base-image-url",
-	});
-};
-
+// 按全局开关决定是否执行 Referer 校验，关闭时直接放行。
 const validateRefererByConfig = async (request) => {
 	if (!REFERER_CHECK_ENABLED) {
 		return { allowed: true, response: null };
@@ -157,13 +144,14 @@ const validateRefererByConfig = async (request) => {
 	});
 };
 
-
+// 根据所选文件夹组合随机生成一个图片 URL。
 const buildImageUrl = (baseImageUrl, selectedFolder) => {
 	const imageNumber = Math.floor(Math.random() * selectedFolder.count) + 1;
 	const imageFilename = `${String(imageNumber).padStart(IMAGE_FILENAME_DIGITS, "0")}.webp`;
 	return `${baseImageUrl}${selectedFolder.device}-${selectedFolder.brightness}/${selectedFolder.theme}/${imageFilename}`;
 };
 
+// 从上游响应中提取需透传的响应头，并固定 Content-Type 为 image/webp。
 const buildProxyResponseHeaders = (upstreamResponse) => {
 	const responseHeaders = {
 		"Content-Type": "image/webp",
@@ -179,6 +167,7 @@ const buildProxyResponseHeaders = (upstreamResponse) => {
 	return responseHeaders;
 };
 
+// 按指定 method 响应图片：redirect 直接跳转，proxy 拉取上游后转发（失败时按次数重试）。
 const respondImageByMethod = async (method, imageUrl) => {
 	if (method === "redirect") {
 		try {
@@ -268,14 +257,14 @@ export const handleRandomImg = async (request) => {
 	// 校验 method 参数：仅允许 proxy 或 redirect
 	// 判断 method 是否在允许集合内。
 	if (!METHOD_SET.has(method)) {
-		return invalidFieldError(RANDOM_IMG_ERRORS.INVALID_METHOD, "m", method, METHOD_VALUES);
+		return buildInvalidFieldResponse(RANDOM_IMG_ERRORS.INVALID_METHOD, "m", method, METHOD_VALUES);
 	}
 
 	// 读取请求指定的设备参数（若未传则为 null）。
 	const requestedDevice = params.get("d")?.toLowerCase() || null;
 	// 若传入了设备参数，则校验其是否属于请求允许集合。
 	if (requestedDevice && !REQUEST_DEVICE_SET.has(requestedDevice)) {
-		return invalidFieldError(RANDOM_IMG_ERRORS.INVALID_DEVICE, "d", requestedDevice, REQUEST_DEVICES);
+		return buildInvalidFieldResponse(RANDOM_IMG_ERRORS.INVALID_DEVICE, "d", requestedDevice, REQUEST_DEVICES);
 	}
 
 	// 设备选择逻辑：优先使用请求参数，其次根据 User-Agent 判断移动/桌面，最后退回默认设备 "r"（random）。
@@ -291,7 +280,7 @@ export const handleRandomImg = async (request) => {
 	const requestedBrightness = params.get("b")?.toLowerCase() || null;
 	// 若传入亮度参数，则校验其合法性。
 	if (requestedBrightness && !BRIGHTNESS_SET.has(requestedBrightness)) {
-		return invalidFieldError(RANDOM_IMG_ERRORS.INVALID_BRIGHTNESS, "b", requestedBrightness, BRIGHTNESS_VALUES);
+		return buildInvalidFieldResponse(RANDOM_IMG_ERRORS.INVALID_BRIGHTNESS, "b", requestedBrightness, BRIGHTNESS_VALUES);
 	}
 
 	// 读取并归一化 theme 参数：支持多次传参与逗号分隔，最终去重。
@@ -322,15 +311,14 @@ export const handleRandomImg = async (request) => {
 	let themeCandidates;
 	if (themeParams.length > 0) {
 		// 按需验证：仅检查请求中的主题是否在配置中存在（Set 查找）。
-		const validThemeSet = getValidThemeSet(folderMap);
-		const invalidTheme = themeParams.find((candidateTheme) => !validThemeSet.has(candidateTheme));
+		const invalidTheme = themeParams.find((candidateTheme) => !ensureValidThemeCache(folderMap).themeSet.has(candidateTheme));
 		if (invalidTheme) {
-			return invalidFieldError(RANDOM_IMG_ERRORS.INVALID_THEME, "t", invalidTheme, getValidThemes(folderMap));
+			return buildInvalidFieldResponse(RANDOM_IMG_ERRORS.INVALID_THEME, "t", invalidTheme);
 		}
 		themeCandidates = themeParams;
 	} else {
 		// 未传 t 时，才构建并使用全量主题候选。
-		themeCandidates = getValidThemes(folderMap);
+		themeCandidates = ensureValidThemeCache(folderMap).themes;
 	}
 
 	// 初始化候选组合列表，用于后续加权随机抽样。
@@ -403,7 +391,11 @@ export const handleRandomImg = async (request) => {
 	}
 
 	// 读取基础图片 URL 配置。
-	const baseImageUrl = await getBaseImageUrlFromKV();
+	const baseImageUrl = await getKvUrlCached({
+		namespace: RANDOM_IMG_CONFIG_NAMESPACE,
+		key: BASE_IMAGE_URL_KEY,
+		cacheKey: "random-img::base-image-url",
+	});
 	// 若基础 URL 缺失或无效，则返回配置错误。
 	if (!baseImageUrl) {
 		return detailedErrorResponse(RANDOM_IMG_ERRORS.BASE_IMAGE_URL_CONFIG_ERROR, BASE_IMAGE_URL_CONFIG_ERROR_DETAILS);
@@ -412,6 +404,7 @@ export const handleRandomImg = async (request) => {
 	return await respondImageByMethod(effectiveMethod, buildImageUrl(baseImageUrl, selectedFolder));
 };
 
+// 汇总 FOLDER_MAP 中的图片数量：按设备-亮度组合分组、按主题聚合、并计算总数。
 const buildRandomImgCountData = (folderMap) => {
 	const groupTotals = {};
 	const themeDetails = {};
@@ -448,6 +441,7 @@ const buildRandomImgCountData = (folderMap) => {
 	};
 };
 
+// 处理图片数量统计请求：读取 FOLDER_MAP 并返回汇总统计数据。
 export const handleRandomImgCount = async () => {
 	const folderMap = await getFolderMapFromKV();
 	if (!folderMap) {

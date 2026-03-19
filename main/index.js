@@ -5,6 +5,7 @@ import { detailedErrorResponse, jsonErrorResponse, jsonSuccessResponse } from ".
 // ===========================
 // 可配置参数（优先编辑此区域）
 // ===========================
+
 const HIDDEN_ROUTES_NAMESPACE = "hidden-routes";
 // 隐藏路由入口注册：新增隐藏路由时仅需在此追加 KV key 字符串。
 const HIDDEN_PATH_KEYS = ["RANDOM_IMG_COUNT_PATH"];
@@ -23,6 +24,7 @@ const routeHandlerCache = new Map();
 let hiddenHandlerMapPromise = null;
 let hiddenHandlerValidationLogged = false;
 
+// 将横线或下划线分隔的字符串转换为 PascalCase（如 random-img → RandomImg）。
 const toPascalCase = (value) =>
 	value
 		.split(/[-_]/)
@@ -30,6 +32,7 @@ const toPascalCase = (value) =>
 		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
 		.join("");
 
+// 由路由路径派生 handler 函数名（如 /random-img → handleRandomImg）。
 const toHandlerNameFromRoutePath = (routePath) => {
 	const normalizedPath = routePath.replace(/^\/+/, "");
 	return `handle${toPascalCase(normalizedPath)}`;
@@ -39,9 +42,11 @@ const toHandlerNameFromRoutePath = (routePath) => {
 const toHiddenHandlerName = (kvPathKey) =>
 	`handle${toPascalCase(kvPathKey.replace(/_PATH$/, "").toLowerCase())}`;
 
+// 提取 ROUTES 中所有对象类型的模块引用，去重后返回（用于 handler 自动匹配）。
 const getRegisteredRouteModules = () =>
 	Array.from(new Set(Object.values(ROUTES).filter((value) => value && typeof value === "object")));
 
+// 按 pathname 解析对应的处理函数，结果写入本地缓存以复用。
 const resolveRouteHandler = async (pathname) => {
 	if (routeHandlerCache.has(pathname)) {
 		return routeHandlerCache.get(pathname);
@@ -71,6 +76,7 @@ const resolveRouteHandler = async (pathname) => {
 	return null;
 };
 
+// 按 KV key 从已注册模块中懒加载对应的 handler（全局只初始化一次）。
 const resolveHiddenHandler = async (kvPathKey) => {
 	if (!hiddenHandlerMapPromise) {
 		hiddenHandlerMapPromise = (async () => {

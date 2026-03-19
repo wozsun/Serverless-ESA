@@ -11,9 +11,6 @@ const REFERER_ERRORS = {
 	},
 };
 
-// 标准化规则文本：trim + 小写。
-const normalizePattern = (value) => (typeof value === "string" ? value.toLowerCase() : "");
-
 // 解析 Referer 并提取 origin。
 const parseRefererOrigin = (referer) => {
 	try {
@@ -45,7 +42,7 @@ const loadAllowedReferer = (namespace) =>
 
 // 匹配 Referer 规则：支持精确 origin 与 https://*.example.com 通配。
 const matchRefererPattern = (refererOrigin, pattern) => {
-	const normalizedPattern = normalizePattern(pattern);
+	const normalizedPattern = typeof pattern === "string" ? pattern.toLowerCase() : "";
 	if (!normalizedPattern) {
 		return false;
 	}
