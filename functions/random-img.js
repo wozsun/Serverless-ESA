@@ -17,8 +17,8 @@ const BRIGHTNESS_VALUES = ["dark", "light"];
 const METHOD_VALUES = ["proxy", "redirect"];
 
 const IMAGE_FILENAME_DIGITS = 6;
-const UPSTREAM_FETCH_MAX_ATTEMPTS = 3;
-const UPSTREAM_FETCH_RETRY_BASE_DELAY_MS = 100;
+const FETCH_MAX_ATTEMPTS = 3;
+const FETCH_RETRY_DELAY_MS = 100;
 const REFERER_CHECK_ENABLED = false;
 const ALLOW_EMPTY_REFERER = true;
 const REDIRECT_ENABLED = true;
@@ -27,9 +27,6 @@ const ALLOWED_PARAMS_SET = new Set(ALLOWED_PARAMS);
 const REQUEST_DEVICE_SET = new Set(REQUEST_DEVICES);
 const BRIGHTNESS_SET = new Set(BRIGHTNESS_VALUES);
 const METHOD_SET = new Set(METHOD_VALUES);
-
-// 异步等待指定毫秒数，供上游请求重试退避使用。
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 
 // ===========================
@@ -163,7 +160,7 @@ const respondImageByMethod = async (method, imageUrl) => {
 		}
 	}
 
-	for (let attempt = 1; attempt <= UPSTREAM_FETCH_MAX_ATTEMPTS; attempt++) {
+	for (let attempt = 1; attempt <= FETCH_MAX_ATTEMPTS; attempt++) {
 		try {
 			const upstreamResponse = await fetch(imageUrl);
 
@@ -180,19 +177,19 @@ const respondImageByMethod = async (method, imageUrl) => {
 				headers: upstreamResponse.headers,
 			});
 		} catch {
-			if (attempt >= UPSTREAM_FETCH_MAX_ATTEMPTS) {
+			if (attempt >= FETCH_MAX_ATTEMPTS) {
 				return jsonErrorResponse(RANDOM_IMG_ERRORS.UPSTREAM_FETCH_EXCEPTION, {
 					hint: "Upstream request failed before receiving a valid response",
 					retryAttempts: attempt,
 				});
 			}
-			await sleep(UPSTREAM_FETCH_RETRY_BASE_DELAY_MS * attempt);
+			await new Promise((resolve) => setTimeout(resolve, FETCH_RETRY_DELAY_MS * attempt));
 		}
 	}
 
 	return jsonErrorResponse(RANDOM_IMG_ERRORS.UPSTREAM_FETCH_EXCEPTION, {
 		hint: "Upstream request failed before receiving a valid response",
-		retryAttempts: UPSTREAM_FETCH_MAX_ATTEMPTS,
+		retryAttempts: FETCH_MAX_ATTEMPTS,
 	});
 };
 

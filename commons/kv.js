@@ -39,9 +39,6 @@ const cacheStores = {
 // 生成缓存键：优先使用自定义 cacheKey，否则使用 namespace + key
 const buildCacheKey = (namespace, key, cacheKey) => cacheKey || `${namespace}::${key}`;
 
-// 重试退避使用的异步睡眠函数
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 // 读取缓存值：存在且未过期则命中
 const readCache = (cacheStore, id) => {
 	const cached = cacheStore.get(id);
@@ -122,7 +119,7 @@ const fetchFromKv = async ({ namespace, key, type }) => {
 			if (attempt >= KV_GET_MAX_ATTEMPTS) {
 				return null;
 			}
-			await sleep(KV_RETRY_BASE_DELAY_MS * attempt);
+			await new Promise((resolve) => setTimeout(resolve, KV_RETRY_BASE_DELAY_MS * attempt));
 		}
 	}
 
