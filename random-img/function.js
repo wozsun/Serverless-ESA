@@ -25,7 +25,6 @@ const UPSTREAM_FETCH_RETRY_BASE_DELAY_MS = 100;
 const REFERER_CHECK_ENABLED = false;
 const ALLOW_EMPTY_REFERER = true;
 const REDIRECT_ENABLED = true;
-const PROXY_RESPONSE_HEADER_NAMES = ["x-site-cache-status", "x-swift-savetime"];
 
 const ALLOWED_PARAMS_SET = new Set(ALLOWED_PARAMS);
 const REQUEST_DEVICE_SET = new Set(REQUEST_DEVICES);
@@ -151,22 +150,6 @@ const buildImageUrl = (baseImageUrl, selectedFolder) => {
 	return `${baseImageUrl}${selectedFolder.device}-${selectedFolder.brightness}/${selectedFolder.theme}/${imageFilename}`;
 };
 
-// 从上游响应中提取需透传的响应头，并固定 Content-Type 为 image/webp。
-const buildProxyResponseHeaders = (upstreamResponse) => {
-	const responseHeaders = {
-		"Content-Type": "image/webp",
-	};
-
-	for (const headerName of PROXY_RESPONSE_HEADER_NAMES) {
-		const headerValue = upstreamResponse.headers.get(headerName);
-		if (headerValue) {
-			responseHeaders[headerName] = headerValue;
-		}
-	}
-
-	return responseHeaders;
-};
-
 // 按指定 method 响应图片：redirect 直接跳转，proxy 拉取上游后转发（失败时按次数重试）。
 const respondImageByMethod = async (method, imageUrl) => {
 	if (method === "redirect") {
@@ -195,11 +178,9 @@ const respondImageByMethod = async (method, imageUrl) => {
 				});
 			}
 
-			const responseHeaders = buildProxyResponseHeaders(upstreamResponse);
-
 			return new Response(upstreamResponse.body, {
 				status: upstreamResponse.status,
-				headers: responseHeaders,
+				headers: upstreamResponse.headers,
 			});
 		} catch {
 			if (attempt >= UPSTREAM_FETCH_MAX_ATTEMPTS) {
