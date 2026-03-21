@@ -32,10 +32,10 @@ TIMEOUT_SECONDS = 30.0
 RANDOM_RUNS = 10
 # redirect 行为开关：True=期望 m=redirect 返回 302，False=期望回退到 proxy。
 REDIRECT_ENABLED = True
-# 图片文件名数字位数（例如 5 -> 00001.webp）。
+# 图片文件名数字位数（例如 6 -> 000001.webp）。
 IMAGE_FILENAME_DIGITS = 6
 # 5xx 响应最大重试次数（不含首次请求）。
-MAX_HTTP_5XX_RETRIES = 3
+MAX_HTTP_5XX_RETRIES = 5
 # 瞬时网络/读取失败时的最大重试次数（不含首次请求）。
 MAX_NETWORK_RETRIES = 5
 # 线性退避基数（sleep = base * attempt）。

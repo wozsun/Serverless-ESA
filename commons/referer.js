@@ -1,5 +1,5 @@
 import { getKvTextLinesCached } from "./kv.js";
-import { detailedErrorResponse } from "./response.js";
+import { jsonErrorResponse } from "./response.js";
 
 const ALLOWED_REFERER_KEY = "ALLOWED_REFERER";
 
@@ -22,11 +22,11 @@ const parseRefererOrigin = (referer) => {
 
 // 构造 Referer 禁止访问响应。
 const buildForbiddenResponse = (details) =>
-	detailedErrorResponse(REFERER_ERRORS.FORBIDDEN_REFERER, details);
+	jsonErrorResponse(REFERER_ERRORS.FORBIDDEN_REFERER, details);
 
 // 构造 Referer 配置错误响应。
 const buildConfigErrorResponse = (namespace) =>
-	detailedErrorResponse(REFERER_ERRORS.ALLOWED_REFERER_CONFIG_ERROR, {
+	jsonErrorResponse(REFERER_ERRORS.ALLOWED_REFERER_CONFIG_ERROR, {
 		configKey: ALLOWED_REFERER_KEY,
 		namespace,
 		hint: "Ensure ALLOWED_REFERER exists in KV and contains one referer pattern per line",

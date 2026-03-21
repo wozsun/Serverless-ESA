@@ -1,9 +1,6 @@
-import { detailedErrorResponse, jsonSuccessResponse } from "../main/response.js";
-import { validateRefererAccess } from "../main/referer.js";
-import {
-	getKvJsonObjectCached,
-	getKvUrlCached,
-} from "../main/kv.js";
+import { getKvJsonObjectCached, getKvUrlCached } from "../commons/kv.js";
+import { jsonErrorResponse, jsonSuccessResponse } from "../commons/response.js";
+import { validateRefererAccess } from "../commons/referer.js";
 
 // ===========================
 // 随机图片 API 配置
@@ -67,7 +64,7 @@ const BASE_IMAGE_URL_CONFIG_ERROR_DETAILS = {
 
 // 基于字段名、收到的值与允许值构造统一的参数校验错误响应。
 const buildInvalidFieldResponse = (error, field, received, allowed) =>
-	detailedErrorResponse(error, { field, received, allowed });
+	jsonErrorResponse(error, { field, received, allowed });
 
 // 检查查询参数是否都在白名单内，若存在非法参数则直接返回 400 错误响应。
 const validateAllowedQueryParams = (params, allowedParams) => {
@@ -75,7 +72,7 @@ const validateAllowedQueryParams = (params, allowedParams) => {
 	for (const key of params.keys()) {
 		// 若当前参数不在允许集合中，则立即返回错误。
 		if (!allowedParams.has(key)) {
-			return detailedErrorResponse(RANDOM_IMG_ERRORS.INVALID_QUERY_PARAMS, {
+			return jsonErrorResponse(RANDOM_IMG_ERRORS.INVALID_QUERY_PARAMS, {
 				invalidParams: [key],
 				allowedParams: ALLOWED_PARAMS,
 			});
@@ -159,7 +156,7 @@ const respondImageByMethod = async (method, imageUrl) => {
 				headers: { Location: imageUrl },
 			});
 		} catch (error) {
-			return detailedErrorResponse(RANDOM_IMG_ERRORS.REDIRECT_RESPONSE_EXCEPTION, {
+			return jsonErrorResponse(RANDOM_IMG_ERRORS.REDIRECT_RESPONSE_EXCEPTION, {
 				hint: "Redirect target is invalid for Location header",
 				errorName: error instanceof Error ? error.name : "unknown",
 			});
@@ -171,7 +168,7 @@ const respondImageByMethod = async (method, imageUrl) => {
 			const upstreamResponse = await fetch(imageUrl);
 
 			if (!upstreamResponse.ok) {
-				return detailedErrorResponse(RANDOM_IMG_ERRORS.UPSTREAM_BAD_STATUS, {
+				return jsonErrorResponse(RANDOM_IMG_ERRORS.UPSTREAM_BAD_STATUS, {
 					upstreamStatus: upstreamResponse.status,
 					upstreamStatusText: upstreamResponse.statusText || undefined,
 					hint: "Upstream responded but did not return a success status",
@@ -184,7 +181,7 @@ const respondImageByMethod = async (method, imageUrl) => {
 			});
 		} catch {
 			if (attempt >= UPSTREAM_FETCH_MAX_ATTEMPTS) {
-				return detailedErrorResponse(RANDOM_IMG_ERRORS.UPSTREAM_FETCH_EXCEPTION, {
+				return jsonErrorResponse(RANDOM_IMG_ERRORS.UPSTREAM_FETCH_EXCEPTION, {
 					hint: "Upstream request failed before receiving a valid response",
 					retryAttempts: attempt,
 				});
@@ -193,7 +190,7 @@ const respondImageByMethod = async (method, imageUrl) => {
 		}
 	}
 
-	return detailedErrorResponse(RANDOM_IMG_ERRORS.UPSTREAM_FETCH_EXCEPTION, {
+	return jsonErrorResponse(RANDOM_IMG_ERRORS.UPSTREAM_FETCH_EXCEPTION, {
 		hint: "Upstream request failed before receiving a valid response",
 		retryAttempts: UPSTREAM_FETCH_MAX_ATTEMPTS,
 	});
@@ -214,7 +211,7 @@ export const handleRandomImg = async (request) => {
 	try {
 		params = new URL(request.url).searchParams;
 	} catch {
-		return detailedErrorResponse({
+		return jsonErrorResponse({
 			status: 400,
 			message: "Bad Request: Request URL is malformed or cannot be parsed",
 		}, {
@@ -232,14 +229,15 @@ export const handleRandomImg = async (request) => {
 
 	// 读取 method 参数，缺省时默认使用 proxy。
 	const method = params.get("m")?.toLowerCase() || "proxy";
-	// 强制开关：若关闭重定向，则无论参数如何都用 proxy
-	const effectiveMethod = REDIRECT_ENABLED ? method : "proxy";
 
 	// 校验 method 参数：仅允许 proxy 或 redirect
 	// 判断 method 是否在允许集合内。
 	if (!METHOD_SET.has(method)) {
 		return buildInvalidFieldResponse(RANDOM_IMG_ERRORS.INVALID_METHOD, "m", method, METHOD_VALUES);
 	}
+
+	// 强制开关：若关闭重定向，则无论参数如何都用 proxy
+	const effectiveMethod = REDIRECT_ENABLED ? method : "proxy";
 
 	// 读取请求指定的设备参数（若未传则为 null）。
 	const requestedDevice = params.get("d")?.toLowerCase() || null;
@@ -285,7 +283,7 @@ export const handleRandomImg = async (request) => {
 	const folderMap = await getFolderMapFromKV();
 	// 若配置异常则返回统一配置错误响应。
 	if (!folderMap) {
-		return detailedErrorResponse(RANDOM_IMG_ERRORS.FOLDER_MAP_CONFIG_ERROR, FOLDER_MAP_CONFIG_ERROR_DETAILS);
+		return jsonErrorResponse(RANDOM_IMG_ERRORS.FOLDER_MAP_CONFIG_ERROR, FOLDER_MAP_CONFIG_ERROR_DETAILS);
 	}
 
 	// 处理 theme 参数
@@ -326,7 +324,7 @@ export const handleRandomImg = async (request) => {
 	if (candidates.length === 0) {
 		// 指定了亮度或主题但无结果时，返回组合无图错误并回显过滤条件。
 		if (requestedBrightness || themeParams.length > 0) {
-			return detailedErrorResponse(RANDOM_IMG_ERRORS.NO_IMAGES_FOR_COMBINATION, {
+			return jsonErrorResponse(RANDOM_IMG_ERRORS.NO_IMAGES_FOR_COMBINATION, {
 				filters: {
 					device,
 					brightness: requestedBrightness,
@@ -335,7 +333,7 @@ export const handleRandomImg = async (request) => {
 			});
 		}
 		// 未指定过滤条件且仍无可用图时，返回通用无图错误。
-		return detailedErrorResponse(RANDOM_IMG_ERRORS.NO_AVAILABLE_IMAGES, {
+		return jsonErrorResponse(RANDOM_IMG_ERRORS.NO_AVAILABLE_IMAGES, {
 			hint: "Check FOLDER_MAP counts in KV to ensure at least one image count is greater than 0",
 		});
 	}
@@ -349,7 +347,7 @@ export const handleRandomImg = async (request) => {
 		const totalWeight = candidates.reduce((sum, candidate) => sum + candidate.count, 0);
 		// 权重异常兜底，避免 totalWeight 非法导致随机逻辑出错。
 		if (!Number.isFinite(totalWeight) || totalWeight <= 0) {
-			return detailedErrorResponse(RANDOM_IMG_ERRORS.NO_AVAILABLE_IMAGES, {
+			return jsonErrorResponse(RANDOM_IMG_ERRORS.NO_AVAILABLE_IMAGES, {
 				hint: "No valid weighted candidates available",
 			});
 		}
@@ -379,7 +377,7 @@ export const handleRandomImg = async (request) => {
 	});
 	// 若基础 URL 缺失或无效，则返回配置错误。
 	if (!baseImageUrl) {
-		return detailedErrorResponse(RANDOM_IMG_ERRORS.BASE_IMAGE_URL_CONFIG_ERROR, BASE_IMAGE_URL_CONFIG_ERROR_DETAILS);
+		return jsonErrorResponse(RANDOM_IMG_ERRORS.BASE_IMAGE_URL_CONFIG_ERROR, BASE_IMAGE_URL_CONFIG_ERROR_DETAILS);
 	}
 
 	return await respondImageByMethod(effectiveMethod, buildImageUrl(baseImageUrl, selectedFolder));
@@ -426,7 +424,7 @@ const buildRandomImgCountData = (folderMap) => {
 export const handleRandomImgCount = async () => {
 	const folderMap = await getFolderMapFromKV();
 	if (!folderMap) {
-		return detailedErrorResponse(RANDOM_IMG_ERRORS.FOLDER_MAP_CONFIG_ERROR, FOLDER_MAP_CONFIG_ERROR_DETAILS);
+		return jsonErrorResponse(RANDOM_IMG_ERRORS.FOLDER_MAP_CONFIG_ERROR, FOLDER_MAP_CONFIG_ERROR_DETAILS);
 	}
 	return jsonSuccessResponse(buildRandomImgCountData(folderMap));
 };

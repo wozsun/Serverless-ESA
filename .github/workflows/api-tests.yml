@@ -31,10 +31,10 @@ jobs:
       - name: Wait for deployment propagation
         run: sleep 60
 
-      - name: Run main route tests
+      - name: Run main route test
         shell: bash
-        run: python main/test.py
+        run: python tests/main-test.py
 
-      - name: Run random image tests
+      - name: Run random image test
         shell: bash
-        run: python random-img/test.py
+        run: python tests/random-img-test.py

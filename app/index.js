@@ -1,6 +1,6 @@
-import * as randomImgHandlers from "../random-img/function.js";
-import { getKvTextCached } from "./kv.js";
-import { detailedErrorResponse, jsonErrorResponse, jsonSuccessResponse } from "./response.js";
+import { getKvTextCached } from "../commons/kv.js";
+import { jsonErrorResponse, jsonSuccessResponse } from "../commons/response.js";
+import * as randomImgHandlers from "../functions/random-img.js";
 
 // ===========================
 // 可配置参数（优先编辑此区域）
@@ -132,7 +132,7 @@ const resolveHiddenPathRoute = async (url, request) => {
 
 		if (dynamicPath && pathname === dynamicPath) {
 			if (search) {
-				return detailedErrorResponse({ status: 403, message: "Forbidden: Routes do not accept query parameters" }, {
+				return jsonErrorResponse({ status: 403, message: "Forbidden: Routes do not accept query parameters" }, {
 					hint: "Call hidden routes with exact path and no query string",
 				});
 			}
@@ -142,7 +142,7 @@ const resolveHiddenPathRoute = async (url, request) => {
 				return await handler(request);
 			}
 
-			return detailedErrorResponse({ status: 500, message: "Internal Server Error: Route handler is not configured" }, {
+			return jsonErrorResponse({ status: 500, message: "Internal Server Error: Route handler is not configured" }, {
 				hint: "Check hidden route key to handler naming convention",
 			});
 		}

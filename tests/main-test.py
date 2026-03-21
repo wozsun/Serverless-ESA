@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 CONFIG_ENV_NAME = "CONFIG"
-TIMEOUT_SECONDS = 20
+TIMEOUT_SECONDS = 30
 MAX_NETWORK_RETRIES = 5
 RETRY_BACKOFF_BASE_SECONDS = 1
 
