@@ -55,6 +55,7 @@ REQUIRED_ERROR_COVERAGE_KEYS = {
     "INVALID_BRIGHTNESS",
     "INVALID_METHOD",
     "INVALID_THEME",
+    "THEME_CONFLICT",
 }
 # 受数据分布影响、可能缺失的错误类型。
 OPTIONAL_ERROR_COVERAGE_KEYS = {"NO_IMAGES_FOR_COMBINATION", "NO_AVAILABLE_IMAGES"}
@@ -178,6 +179,7 @@ class ApiTester:
             "INVALID_BRIGHTNESS": False,
             "INVALID_METHOD": False,
             "INVALID_THEME": False,
+            "THEME_CONFLICT": False,
             "NO_IMAGES_FOR_COMBINATION": False,
             "NO_AVAILABLE_IMAGES": False,
         }
@@ -436,6 +438,8 @@ class ApiTester:
             self.error_coverage["INVALID_METHOD"] = True
         elif "Invalid theme" in message:
             self.error_coverage["INVALID_THEME"] = True
+        elif "Cannot mix include and exclude" in message:
+            self.error_coverage["THEME_CONFLICT"] = True
         elif "No available images for the selected filters" in message:
             self.error_coverage["NO_IMAGES_FOR_COMBINATION"] = True
         elif "No available images" in message:
@@ -1110,6 +1114,136 @@ class ApiTester:
             print(
                 "[SKIP] 不存在同 device+brightness 下至少 2 个可用主题，跳过多主题断言"
             )
+
+        # 7.5) 主题排除（t=!theme）功能覆盖
+        all_themes = sorted(theme_details.keys())
+        self.register_theme_tokens(all_themes)
+
+        # 7.5.1) 包含与排除混用 → 400 THEME_INCLUDE_EXCLUDE_CONFLICT
+        if len(all_themes) >= 2:
+            mix_include = all_themes[0]
+            mix_exclude = all_themes[1]
+            self.expect_json_error(
+                "/random-img",
+                {"t": f"{mix_include},!{mix_exclude}"},
+                400,
+                "Cannot mix include and exclude",
+                "theme include-exclude conflict (csv)",
+                expected_detail_keys=["includeThemes", "excludeThemes", "hint"],
+            )
+
+            # 重复参数形式混用
+            conflict_repeat = self.request_query_items(
+                "/random-img",
+                query_items=[
+                    ("t", mix_include),
+                    ("t", f"!{mix_exclude}"),
+                ],
+                follow_redirects=True,
+            )
+            self.assert_true(
+                conflict_repeat.status == 400,
+                "theme include-exclude conflict (repeated-t)",
+                f"status={conflict_repeat.status}, expected=400",
+            )
+        else:
+            print("[SKIP] 不足 2 个主题，跳过主题包含排除混用断言")
+
+        # 7.5.2) 排除不存在的主题 → 400 INVALID_THEME
+        self.expect_json_error(
+            "/random-img",
+            {"t": "!__nonexistent_theme__"},
+            400,
+            "Invalid theme",
+            "exclude invalid theme",
+            expected_field="t",
+            expected_received="!__nonexistent_theme__",
+            forbidden_detail_keys=["allowed"],
+        )
+
+        # 7.5.3) 排除单个主题，其他主题有图 → 200
+        if multi_theme_group:
+            device, brightness, themes = multi_theme_group
+            exclude_one = themes[0]
+
+            exclude_proxy = self.request(
+                "/random-img",
+                query={"d": device, "b": brightness, "t": f"!{exclude_one}", "m": "proxy"},
+                follow_redirects=True,
+            )
+            self.assert_true(
+                exclude_proxy.status == 200,
+                "theme exclude single proxy status",
+                f"status={exclude_proxy.status}",
+            )
+
+            exclude_redirect = self.request(
+                "/random-img",
+                query={"d": device, "b": brightness, "t": f"!{exclude_one}", "m": "redirect"},
+                follow_redirects=False,
+            )
+            if REDIRECT_ENABLED:
+                self.assert_true(
+                    exclude_redirect.status == 302,
+                    "theme exclude single redirect status",
+                    f"status={exclude_redirect.status}",
+                )
+            else:
+                self.assert_true(
+                    exclude_redirect.status == 200,
+                    "theme exclude single redirect fallback-to-proxy status",
+                    f"status={exclude_redirect.status}",
+                )
+
+            # 7.5.4) csv 排除多个主题
+            if len(themes) >= 3:
+                exclude_csv = f"!{themes[0]},!{themes[1]}"
+                exclude_csv_result = self.request(
+                    "/random-img",
+                    query={"d": device, "b": brightness, "t": exclude_csv, "m": "proxy"},
+                    follow_redirects=True,
+                )
+                self.assert_true(
+                    exclude_csv_result.status == 200,
+                    "theme exclude csv proxy status",
+                    f"status={exclude_csv_result.status}",
+                )
+            else:
+                print("[SKIP] 不足 3 个可用主题，跳过 csv 多主题排除断言")
+
+            # 7.5.5) 重复参数排除多个主题
+            if len(themes) >= 3:
+                exclude_repeat_result = self.request_query_items(
+                    "/random-img",
+                    query_items=[
+                        ("d", device),
+                        ("b", brightness),
+                        ("t", f"!{themes[0]}"),
+                        ("t", f"!{themes[1]}"),
+                        ("m", "proxy"),
+                    ],
+                    follow_redirects=True,
+                )
+                self.assert_true(
+                    exclude_repeat_result.status == 200,
+                    "theme exclude repeated-t proxy status",
+                    f"status={exclude_repeat_result.status}",
+                )
+            else:
+                print("[SKIP] 不足 3 个可用主题，跳过重复参数多主题排除断言")
+
+            # 7.5.6) 排除全部主题 → 404 NO_IMAGES_FOR_COMBINATION
+            all_exclude_csv = ",".join(f"!{t}" for t in themes)
+            self.expect_json_error(
+                "/random-img",
+                {"d": device, "b": brightness, "t": all_exclude_csv},
+                404,
+                "No available images for the selected filters",
+                "theme exclude all → no images",
+                expected_detail_keys=["filters"],
+            )
+        else:
+            print("[SKIP] 不存在多主题组合，跳过主题排除功能断言")
 
         # 8) 每个有图组合至少测一次
         for row in nonzero_details:

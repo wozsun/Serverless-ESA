@@ -37,6 +37,7 @@ const RANDOM_IMG_ERRORS = {
 	INVALID_DEVICE: { status: 400, message: "Bad Request: Invalid device" },
 	INVALID_BRIGHTNESS: { status: 400, message: "Bad Request: Invalid brightness" },
 	INVALID_THEME: { status: 400, message: "Bad Request: Invalid theme" },
+	THEME_CONFLICT: { status: 400, message: "Bad Request: Cannot mix include and exclude theme values" },
 	INVALID_METHOD: { status: 400, message: "Bad Request: Invalid method" },
 	BASE_IMAGE_URL_CONFIG_ERROR: { status: 500, message: "Internal Server Error: BASE_IMAGE_URL is invalid or missing in KV" },
 	FOLDER_MAP_CONFIG_ERROR: { status: 500, message: "Internal Server Error: FOLDER_MAP is invalid or missing in KV" },
@@ -260,11 +261,24 @@ export const handleRandomImg = async (request) => {
 	}
 
 	// 读取并归一化 theme 参数：支持多次传参与逗号分隔，最终去重。
-	const themeParams = Array.from(new Set(params
+	// 以 ! 为前缀的值表示排除该主题，不带前缀为包含，两者不可混用。
+	const rawThemeValues = Array.from(new Set(params
 		.getAll("t")
 		.flatMap((value) => value.split(","))
 		.map((value) => value.trim().toLowerCase())
 		.filter(Boolean)));
+
+	const themeIncludes = rawThemeValues.filter((v) => !v.startsWith("!"));
+	const themeExcludes = rawThemeValues.filter((v) => v.startsWith("!")).map((v) => v.slice(1)).filter(Boolean);
+
+	// 包含与排除不可混用。
+	if (themeIncludes.length > 0 && themeExcludes.length > 0) {
+		return jsonErrorResponse(RANDOM_IMG_ERRORS.THEME_CONFLICT, {
+			includeThemes: themeIncludes,
+			excludeThemes: themeExcludes,
+			hint: "Use either include themes (e.g. t=nature) or exclude themes (e.g. t=!nature), not both",
+		});
+	}
 
 	// 处理 device 参数
 	const deviceCandidates =
@@ -283,15 +297,23 @@ export const handleRandomImg = async (request) => {
 		return jsonErrorResponse(RANDOM_IMG_ERRORS.FOLDER_MAP_CONFIG_ERROR, FOLDER_MAP_CONFIG_ERROR_DETAILS);
 	}
 
-	// 处理 theme 参数
-	let themeCandidates;
-	if (themeParams.length > 0) {
-		// 按需验证：仅检查请求中的主题是否在配置中存在（Set 查找）。
-		const invalidTheme = themeParams.find((candidateTheme) => !ensureValidThemeCache(folderMap).themeSet.has(candidateTheme));
+	// 处理 theme 参数：统一校验所有提及的主题名是否在配置中存在。
+	const allMentionedThemes = [...themeIncludes, ...themeExcludes];
+	if (allMentionedThemes.length > 0) {
+		const { themeSet } = ensureValidThemeCache(folderMap);
+		const invalidTheme = allMentionedThemes.find((t) => !themeSet.has(t));
 		if (invalidTheme) {
-			return buildInvalidFieldResponse(RANDOM_IMG_ERRORS.INVALID_THEME, "t", invalidTheme);
+			const displayValue = themeExcludes.includes(invalidTheme) ? `!${invalidTheme}` : invalidTheme;
+			return buildInvalidFieldResponse(RANDOM_IMG_ERRORS.INVALID_THEME, "t", displayValue);
 		}
-		themeCandidates = themeParams;
+	}
+
+	let themeCandidates;
+	if (themeIncludes.length > 0) {
+		themeCandidates = themeIncludes;
+	} else if (themeExcludes.length > 0) {
+		const excludeSet = new Set(themeExcludes);
+		themeCandidates = ensureValidThemeCache(folderMap).themes.filter((t) => !excludeSet.has(t));
 	} else {
 		// 未传 t 时，才构建并使用全量主题候选。
 		themeCandidates = ensureValidThemeCache(folderMap).themes;
@@ -319,13 +341,14 @@ export const handleRandomImg = async (request) => {
 
 	// 若候选池为空，则根据是否传过滤条件返回不同的 404 错误。
 	if (candidates.length === 0) {
-		// 指定了亮度或主题但无结果时，返回组合无图错误并回显过滤条件。
-		if (requestedBrightness || themeParams.length > 0) {
+		// 指定了亮度或主题（含排除）但无结果时，返回组合无图错误并回显过滤条件。
+		if (requestedBrightness || themeIncludes.length > 0 || themeExcludes.length > 0) {
 			return jsonErrorResponse(RANDOM_IMG_ERRORS.NO_IMAGES_FOR_COMBINATION, {
 				filters: {
 					device,
 					brightness: requestedBrightness,
 					themes: themeCandidates,
+					excludedThemes: themeExcludes.length > 0 ? themeExcludes : undefined,
 				},
 			});
 		}
