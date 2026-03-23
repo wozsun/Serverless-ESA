@@ -298,10 +298,10 @@ export const handleRandomImg = async (request) => {
 	}
 
 	// 处理 theme 参数：统一校验所有提及的主题名是否在配置中存在。
+	const themeCache = ensureValidThemeCache(folderMap);
 	const allMentionedThemes = [...themeIncludes, ...themeExcludes];
 	if (allMentionedThemes.length > 0) {
-		const { themeSet } = ensureValidThemeCache(folderMap);
-		const invalidTheme = allMentionedThemes.find((t) => !themeSet.has(t));
+		const invalidTheme = allMentionedThemes.find((t) => !themeCache.themeSet.has(t));
 		if (invalidTheme) {
 			const displayValue = themeExcludes.includes(invalidTheme) ? `!${invalidTheme}` : invalidTheme;
 			return buildInvalidFieldResponse(RANDOM_IMG_ERRORS.INVALID_THEME, "t", displayValue);
@@ -313,10 +313,10 @@ export const handleRandomImg = async (request) => {
 		themeCandidates = themeIncludes;
 	} else if (themeExcludes.length > 0) {
 		const excludeSet = new Set(themeExcludes);
-		themeCandidates = ensureValidThemeCache(folderMap).themes.filter((t) => !excludeSet.has(t));
+		themeCandidates = themeCache.themes.filter((t) => !excludeSet.has(t));
 	} else {
 		// 未传 t 时，才构建并使用全量主题候选。
-		themeCandidates = ensureValidThemeCache(folderMap).themes;
+		themeCandidates = themeCache.themes;
 	}
 
 	// 初始化候选组合列表，用于后续加权随机抽样。
