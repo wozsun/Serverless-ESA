@@ -199,6 +199,10 @@ const respondImageByMethod = async (method, imageUrl) => {
 // ===========================
 export const handleRandomImg = async (request) => {
 	// 处理随机图片请求：参数校验 -> 候选组合筛选 -> 加权抽样 -> redirect/proxy 返回。
+	if (request.method !== "GET" && request.method !== "HEAD") {
+		return jsonErrorResponse({ status: 405, message: "Method Not Allowed" });
+	}
+
 	const refererCheckResult = await validateRefererByConfig(request);
 	if (!refererCheckResult.allowed) {
 		return refererCheckResult.response;
@@ -290,11 +294,21 @@ export const handleRandomImg = async (request) => {
 	// 若指定亮度则只用该值，否则使用全部亮度候选。
 	const brightnessCandidates = requestedBrightness ? [requestedBrightness] : BRIGHTNESS_VALUES;
 
-	// 读取并校验 FOLDER_MAP 配置。
-	const folderMap = await getFolderMapFromKV();
+	// 并行读取 FOLDER_MAP 与 BASE_IMAGE_URL 配置（两者互不依赖）。
+	const [folderMap, baseImageUrl] = await Promise.all([
+		getFolderMapFromKV(),
+		getKvUrlCached({
+			namespace: RANDOM_IMG_CONFIG_NAMESPACE,
+			key: BASE_IMAGE_URL_KEY,
+			cacheKey: "random-img::base-image-url",
+		}),
+	]);
 	// 若配置异常则返回统一配置错误响应。
 	if (!folderMap) {
 		return jsonErrorResponse(RANDOM_IMG_ERRORS.FOLDER_MAP_CONFIG_ERROR, FOLDER_MAP_CONFIG_ERROR_DETAILS);
+	}
+	if (!baseImageUrl) {
+		return jsonErrorResponse(RANDOM_IMG_ERRORS.BASE_IMAGE_URL_CONFIG_ERROR, BASE_IMAGE_URL_CONFIG_ERROR_DETAILS);
 	}
 
 	// 处理 theme 参数：统一校验所有提及的主题名是否在配置中存在。
@@ -387,17 +401,6 @@ export const handleRandomImg = async (request) => {
 		if (!selectedFolder) {
 			selectedFolder = candidates[candidates.length - 1];
 		}
-	}
-
-	// 读取基础图片 URL 配置。
-	const baseImageUrl = await getKvUrlCached({
-		namespace: RANDOM_IMG_CONFIG_NAMESPACE,
-		key: BASE_IMAGE_URL_KEY,
-		cacheKey: "random-img::base-image-url",
-	});
-	// 若基础 URL 缺失或无效，则返回配置错误。
-	if (!baseImageUrl) {
-		return jsonErrorResponse(RANDOM_IMG_ERRORS.BASE_IMAGE_URL_CONFIG_ERROR, BASE_IMAGE_URL_CONFIG_ERROR_DETAILS);
 	}
 
 	return await respondImageByMethod(effectiveMethod, buildImageUrl(baseImageUrl, selectedFolder));
